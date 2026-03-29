@@ -64,6 +64,8 @@ function makeProject(id: string, name: string): Project {
       effectiveLocalFolder: "/tmp/managed",
       origin: "managed_checkout",
     },
+    controlPlaneState: null,
+    controlPlaneUpdatedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
