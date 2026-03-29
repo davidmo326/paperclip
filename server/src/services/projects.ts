@@ -7,6 +7,7 @@ import {
   isUuidLike,
   normalizeProjectUrlKey,
   type ProjectCodebase,
+  type ProjectControlPlaneState,
   type ProjectExecutionWorkspacePolicy,
   type ProjectGoalRef,
   type ProjectWorkspace,
@@ -38,11 +39,13 @@ type CreateWorkspaceInput = {
 };
 type UpdateWorkspaceInput = Partial<CreateWorkspaceInput>;
 
-interface ProjectWithGoals extends Omit<ProjectRow, "executionWorkspacePolicy"> {
+interface ProjectWithGoals extends Omit<ProjectRow, "executionWorkspacePolicy" | "controlPlaneState"> {
   urlKey: string;
   goalIds: string[];
   goals: ProjectGoalRef[];
   executionWorkspacePolicy: ProjectExecutionWorkspacePolicy | null;
+  controlPlaneState: ProjectControlPlaneState | null;
+  controlPlaneUpdatedAt: Date | null;
   codebase: ProjectCodebase;
   workspaces: ProjectWorkspace[];
   primaryWorkspace: ProjectWorkspace | null;
@@ -92,6 +95,8 @@ async function attachGoals(db: Db, rows: ProjectRow[]): Promise<ProjectWithGoals
       goalIds: g.map((x) => x.id),
       goals: g,
       executionWorkspacePolicy: parseProjectExecutionWorkspacePolicy(r.executionWorkspacePolicy),
+      controlPlaneState: (r.controlPlaneState as ProjectControlPlaneState | null) ?? null,
+      controlPlaneUpdatedAt: r.controlPlaneUpdatedAt ?? null,
     } as ProjectWithGoals;
   });
 }

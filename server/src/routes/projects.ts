@@ -4,11 +4,12 @@ import {
   createProjectSchema,
   createProjectWorkspaceSchema,
   isUuidLike,
+  updateProjectControlPlaneSchema,
   updateProjectSchema,
   updateProjectWorkspaceSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { projectService, logActivity } from "../services/index.js";
+import { projectService, controlPlaneService, logActivity } from "../services/index.js";
 import { conflict } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
@@ -260,6 +261,64 @@ export function projectRoutes(db: Db) {
     });
 
     res.json(workspace);
+  });
+
+  router.get("/projects/:id/control-plane", async (req, res) => {
+    const id = req.params.id as string;
+    const project = await svc.getById(id);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    assertCompanyAccess(req, project.companyId);
+    const result = await controlPlaneService(db).getControlPlane(id);
+    if (!result) {
+      res.status(404).json({ error: "Control plane not found" });
+      return;
+    }
+    res.json(result);
+  });
+
+  router.patch(
+    "/projects/:id/control-plane",
+    validate(updateProjectControlPlaneSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const project = await svc.getById(id);
+      if (!project) {
+        res.status(404).json({ error: "Project not found" });
+        return;
+      }
+      assertCompanyAccess(req, project.companyId);
+      const result = await controlPlaneService(db).updateControlPlane(id, req.body);
+      if (!result) {
+        res.status(404).json({ error: "Control plane not found" });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: project.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        action: "project.control_plane_updated",
+        entityType: "project",
+        entityId: id,
+        details: {
+          changedKeys: Object.keys(req.body).sort(),
+        },
+      });
+
+      res.json(result);
+    },
+  );
+
+  router.get("/companies/:companyId/control-plane/portfolio", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const result = await controlPlaneService(db).getPortfolio(companyId);
+    res.json(result);
   });
 
   router.delete("/projects/:id", async (req, res) => {
