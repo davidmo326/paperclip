@@ -59,7 +59,15 @@ export type {
   ProjectControlPlaneResponse,
   ProjectPortfolioSummary,
   PortfolioResponse,
+  // T-1.3 additions
+  JobClassification,
+  AuthorityLevel,
+  Hypothesis,
+  Assumption,
+  Escalation,
+  OpenLoop,
 } from "./control-plane.js";
+export type { SourceRef, SourceRefKind } from "./source-ref.js";
 export type {
   ExecutionWorkspace,
   WorkspaceRuntimeService,

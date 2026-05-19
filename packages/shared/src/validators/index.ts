@@ -124,9 +124,22 @@ export {
   projectControlPlaneStateSchema,
   updateProjectControlPlaneSchema,
   projectPortfolioSummarySchema,
+  // T-1.3 additions
+  jobClassificationSchema,
+  authorityLevelSchema,
+  hypothesisSchema,
+  assumptionSchema,
+  escalationSchema,
+  openLoopSchema,
   type ProjectControlPlaneStateInput,
   type UpdateProjectControlPlane,
 } from "./control-plane.js";
+
+export {
+  sourceRefKindSchema,
+  sourceRefSchema,
+  type SourceRefInput,
+} from "./source-ref.js";
 
 export {
   createIssueSchema,
