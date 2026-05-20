@@ -330,6 +330,13 @@
       "when": 1774620000000,
       "tag": "0046_founder_control_plane",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1779248994895,
+      "tag": "0047_pacc_decisions_authority",
+      "breakpoints": true
     }
   ]
 }
