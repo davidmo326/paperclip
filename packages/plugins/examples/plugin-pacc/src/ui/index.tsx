@@ -17,6 +17,7 @@ import type {
   ProjectPortfolioSummary,
 } from "@paperclipai/shared";
 import { PLUGIN_ID, SLOT_IDS } from "../constants.js";
+import { writeProjectStateFromUi } from "./write-m2-ui-adapter.js";
 
 // ---------------------------------------------------------------------------
 // Shared styles
@@ -768,10 +769,7 @@ export function PaccProjectTab({ context }: PluginDetailTabProps) {
         body.lastMeaningfulOutput = null;
       }
 
-      await hostFetchJson(`/api/projects/${projectId}/control-plane`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
+      await writeProjectStateFromUi(hostFetchJson, projectId, body);
 
       if (companyId) {
         await refreshTelemetry({ companyId, projectId }).catch(() => null);
@@ -790,9 +788,8 @@ export function PaccProjectTab({ context }: PluginDetailTabProps) {
     if (!projectId || !resumeResult.data?.brief) return;
     setAcceptingResume(true);
     try {
-      await hostFetchJson(`/api/projects/${projectId}/control-plane`, {
-        method: "PATCH",
-        body: JSON.stringify({ resumeBrief: resumeResult.data.brief }),
+      await writeProjectStateFromUi(hostFetchJson, projectId, {
+        resumeBrief: resumeResult.data.brief,
       });
       cpResult.refresh();
     } catch (err) {
@@ -1162,10 +1159,7 @@ export function PaccToolbarButton() {
     setOpen(false);
     setStatus("Saving…");
     try {
-      await hostFetchJson(`/api/projects/${projectId}/control-plane`, {
-        method: "PATCH",
-        body: JSON.stringify({ portfolioState }),
-      });
+      await writeProjectStateFromUi(hostFetchJson, projectId, { portfolioState });
       setStatus(`Set to ${portfolioState}`);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
