@@ -1,0 +1,329 @@
+/**
+ * Brief Markdown renderer — T-3.3.
+ *
+ * Pure function: `Brief` → Markdown string. Byte-identical for the same
+ * input on the same calendar day (the only time-dependent field is
+ * `briefDate` (YYYY-MM-DD); `generatedAt` is intentionally NOT rendered).
+ *
+ * Section order mirrors PRD v0.3 § 13.1's literal template. The
+ * documented template lives at `ControlPlane/templates/daily-brief.md`;
+ * the two are kept in lock-step by tests in `__tests__/brief-render.test.ts`.
+ *
+ * Empty sections render their heading + a placeholder line so re-running
+ * the brief with no state change produces zero diff (cron idempotence).
+ */
+
+import type { Brief, JobMixRow, ProposedAction, StaleRollupRow } from "./types.js";
+
+export interface RenderBriefOptions {
+  /**
+   * When true, the renderer omits the empty-section placeholders (e.g.
+   * "_no entries_"). Default false. Useful when the principal wants a
+   * leaner brief preview.
+   */
+  omitEmptySectionPlaceholders?: boolean;
+}
+
+const EMPTY_PLACEHOLDER = "_no entries_";
+
+export function renderBriefMarkdown(
+  brief: Brief,
+  options: RenderBriefOptions = {},
+): string {
+  const out: string[] = [];
+
+  out.push(`# Daily Operating Brief - ${brief.briefDate}`);
+  out.push("");
+
+  // -- Portfolio Summary -----------------------------------------------------
+  out.push("## Portfolio Summary");
+  out.push("");
+  out.push(brief.portfolioSummary.answer ?? "_No portfolio summary._");
+  if (brief.portfolioSummary.confidence === "low") {
+    out.push("");
+    out.push("> _(low confidence)_");
+  } else if (brief.portfolioSummary.confidence === "unknown") {
+    out.push("");
+    out.push("> _(unknown — no synthesis available)_");
+  }
+  out.push("");
+
+  // -- Job Mix ---------------------------------------------------------------
+  out.push("## Job Mix");
+  out.push("");
+  out.push("| Project | Phase | J1 | J2 | J3 | Meta | Threshold Breach |");
+  out.push("|---|---|---:|---:|---:|---:|---|");
+  const jobMix = [...brief.jobMix].sort(byProjectName);
+  for (const row of jobMix) {
+    out.push(renderJobMixRow(row));
+  }
+  if (jobMix.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`| ${EMPTY_PLACEHOLDER} | | | | | | |`);
+  }
+  out.push("");
+
+  // -- Recommended Focus -----------------------------------------------------
+  out.push("## Recommended Focus");
+  out.push("");
+  if (brief.recommendedFocus) {
+    const f = brief.recommendedFocus;
+    out.push(`- Primary project: ${f.projectId}`);
+    out.push(`- Why now: ${f.rationale}`);
+    out.push(`- Next smallest action: ${f.summary}`);
+    out.push(`- Job classification: ${f.jobClassification}`);
+    out.push(`- Risk if ignored: ${f.expectedArtifact ?? "_(not stated)_"}`);
+    out.push(`- Source support: ${renderInlineSourceRefs(f.sourceRefs)}`);
+  } else {
+    const ph = options.omitEmptySectionPlaceholders ? "" : ` ${EMPTY_PLACEHOLDER}`;
+    out.push(`- Primary project:${ph}`);
+    out.push("- Why now:");
+    out.push("- Next smallest action:");
+    out.push("- Job classification:");
+    out.push("- Risk if ignored:");
+    out.push("- Source support:");
+  }
+  out.push("");
+
+  // -- Projects Needing Attention -------------------------------------------
+  // From blockedProjects + highLeverageActions. We synthesize one row per
+  // project, deduplicating by projectId.
+  out.push("## Projects Needing Attention");
+  out.push("");
+  out.push("| Project | State | Lane | Stale Status | Recommended Action | Authority | Confidence |");
+  out.push("|---|---|---|---|---|---|---|");
+  const attentionRows = synthesizeAttentionRows(brief);
+  for (const row of attentionRows) out.push(row);
+  if (attentionRows.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`| ${EMPTY_PLACEHOLDER} | | | | | | |`);
+  }
+  out.push("");
+
+  // -- Memory / Source Issues -----------------------------------------------
+  out.push("## Memory / Source Issues");
+  out.push("");
+  const memoryIssues = [...brief.staleConflictedMemory].sort(byStaleKind);
+  for (const row of memoryIssues) out.push(renderStaleRollupLine(row));
+  if (memoryIssues.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`- ${EMPTY_PLACEHOLDER}`);
+  }
+  out.push("");
+
+  // -- Escalations -----------------------------------------------------------
+  out.push("## Escalations");
+  out.push("");
+  const escalations = [...brief.escalations].sort(byProjectIdThenQuestion);
+  for (const e of escalations) {
+    const rec = e.recommendedDecision ? ` (recommends: ${e.recommendedDecision})` : "";
+    out.push(`- [ ] ${e.projectId}: ${e.question}${rec}`);
+  }
+  if (escalations.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`- ${EMPTY_PLACEHOLDER}`);
+  }
+  out.push("");
+
+  // -- AI-Proposed Tasks -----------------------------------------------------
+  out.push("## AI-Proposed Tasks");
+  out.push("");
+  const proposed = [...brief.highLeverageActions, ...brief.backlogCandidates].sort(byActionSummary);
+  for (const a of proposed) out.push(renderProposedActionLine(a));
+  if (proposed.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`- ${EMPTY_PLACEHOLDER}`);
+  }
+  out.push("");
+
+  // -- Do Not Rethink --------------------------------------------------------
+  out.push("## Do Not Rethink");
+  out.push("");
+  const dnr = [...brief.doNotRethinkAlerts].sort(byProjectName);
+  for (const d of dnr) {
+    out.push(`- **${d.projectName}**: ${d.settledDecision}`);
+    out.push(`  - ⚠ queued action overlaps: ${d.conflictingAction}`);
+  }
+  if (dnr.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`- ${EMPTY_PLACEHOLDER}`);
+  }
+  out.push("");
+
+  // -- Completed Since Last Brief -------------------------------------------
+  out.push("## Completed Since Last Brief");
+  out.push("");
+  const completed = [...brief.completedWork].sort((a, b) =>
+    a.completedAt < b.completedAt ? 1 : a.completedAt > b.completedAt ? -1 : 0,
+  );
+  for (const c of completed) {
+    out.push(`- **${c.projectId}**: ${c.artifact} _(${c.completedAt})_`);
+  }
+  if (completed.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`- ${EMPTY_PLACEHOLDER}`);
+  }
+  out.push("");
+
+  // -- Source Notes ----------------------------------------------------------
+  out.push("## Source Notes");
+  out.push("");
+  const sources = [...brief.sourceNotes].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
+  // Dedupe by (projectId, path)
+  const seenSources = new Set<string>();
+  let writtenSources = 0;
+  for (const s of sources) {
+    const key = `${s.projectId}|${s.path}`;
+    if (seenSources.has(key)) continue;
+    seenSources.add(key);
+    out.push(`- **${s.projectId}**: \`${s.path}\``);
+    writtenSources += 1;
+  }
+  if (writtenSources === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(`- ${EMPTY_PLACEHOLDER}`);
+  }
+  out.push("");
+
+  // -- Human Feedback --------------------------------------------------------
+  out.push("## Human Feedback");
+  out.push("");
+  out.push(`- Useful: ${renderTriBool(brief.humanFeedback.useful)}`);
+  out.push(`- Wrong: ${brief.humanFeedback.wrong ?? ""}`);
+  out.push(`- Changed priority: ${brief.humanFeedback.changedPriority ?? ""}`);
+  const approvedList = [...brief.humanFeedback.approvedActions].sort();
+  out.push(
+    `- Approved actions: ${approvedList.length === 0 ? "" : approvedList.join(", ")}`,
+  );
+  out.push("");
+
+  // -- Optional Warnings footer ---------------------------------------------
+  if (brief.warnings.length > 0) {
+    out.push("---");
+    out.push("");
+    out.push("## ⚠ Warnings");
+    out.push("");
+    for (const w of [...brief.warnings].sort()) {
+      out.push(`- ${w}`);
+    }
+    out.push("");
+  }
+
+  // Trailing newline only (no Windows-style \r\n) for byte-stability.
+  return out.join("\n").replace(/\n+$/, "") + "\n";
+}
+
+// ---------------------------------------------------------------------------
+// Section helpers
+// ---------------------------------------------------------------------------
+
+function renderJobMixRow(row: JobMixRow): string {
+  const breach = row.thresholdBreach ?? "";
+  return `| ${row.projectName} | ${row.phase ?? ""} | ${pct(row.j1Pct)} | ${pct(row.j2Pct)} | ${pct(row.j3Pct)} | ${pct(row.metaPct)} | ${breach} |`;
+}
+
+function pct(n: number): string {
+  // Stable formatting — same number → same string.
+  return `${Math.round(n)}%`;
+}
+
+function synthesizeAttentionRows(brief: Brief): string[] {
+  // One row per project: blockedProjects ∪ projects-with-highLeverageActions.
+  type AttentionInput = {
+    projectId: string;
+    projectName: string;
+    state: string;
+    lane: string;
+    staleStatus: string;
+    recommendedAction: string;
+    authority: string;
+    confidence: string;
+  };
+
+  const byProject = new Map<string, AttentionInput>();
+
+  for (const b of brief.blockedProjects) {
+    byProject.set(b.projectId, {
+      projectId: b.projectId,
+      projectName: b.projectName,
+      state: "blocked",
+      lane: "",
+      staleStatus: "",
+      recommendedAction: b.blockerSummary ?? "_unblock_",
+      authority: "L1",
+      confidence: "",
+    });
+  }
+
+  for (const a of brief.highLeverageActions) {
+    const existing = byProject.get(a.projectId);
+    if (existing) {
+      existing.recommendedAction = a.summary;
+      existing.authority = a.requiredAuthority;
+      existing.confidence = a.confidence.toFixed(2);
+    } else {
+      byProject.set(a.projectId, {
+        projectId: a.projectId,
+        projectName: a.projectId,
+        state: "active",
+        lane: "",
+        staleStatus: "",
+        recommendedAction: a.summary,
+        authority: a.requiredAuthority,
+        confidence: a.confidence.toFixed(2),
+      });
+    }
+  }
+
+  const sorted = [...byProject.values()].sort((a, b) =>
+    a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0,
+  );
+  return sorted.map(
+    (r) =>
+      `| ${r.projectName} | ${r.state} | ${r.lane} | ${r.staleStatus} | ${r.recommendedAction} | ${r.authority} | ${r.confidence} |`,
+  );
+}
+
+function renderStaleRollupLine(row: StaleRollupRow): string {
+  const projects = [...row.projectIds].sort().join(", ");
+  return `- [ ] **${row.kind}** (${row.count}) — projects: ${projects}`;
+}
+
+function renderProposedActionLine(a: ProposedAction): string {
+  const artifact = a.expectedArtifact ?? "(no expected artifact)";
+  return `- [ ] **${a.summary}** — ${artifact} — ${a.requiredAuthority} — ${a.jobClassification}`;
+}
+
+function renderInlineSourceRefs(
+  refs: Array<{ kind: string; path: string; section?: string }>,
+): string {
+  if (refs.length === 0) return "_(none cited)_";
+  return refs
+    .slice(0, 5)
+    .map((r) => `\`${r.path}\`${r.section ? ` ${r.section}` : ""}`)
+    .join("; ");
+}
+
+function renderTriBool(v: boolean | null): string {
+  if (v === null) return "";
+  return v ? "yes" : "no";
+}
+
+// ---------------------------------------------------------------------------
+// Comparators
+// ---------------------------------------------------------------------------
+
+function byProjectName<T extends { projectName: string }>(a: T, b: T): number {
+  return a.projectName < b.projectName ? -1 : a.projectName > b.projectName ? 1 : 0;
+}
+
+function byStaleKind(a: StaleRollupRow, b: StaleRollupRow): number {
+  return a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0;
+}
+
+function byProjectIdThenQuestion(
+  a: { projectId: string; question: string },
+  b: { projectId: string; question: string },
+): number {
+  if (a.projectId !== b.projectId) return a.projectId < b.projectId ? -1 : 1;
+  return a.question < b.question ? -1 : a.question > b.question ? 1 : 0;
+}
+
+function byActionSummary(a: ProposedAction, b: ProposedAction): number {
+  if (a.projectId !== b.projectId) return a.projectId < b.projectId ? -1 : 1;
+  return a.summary < b.summary ? -1 : a.summary > b.summary ? 1 : 0;
+}
