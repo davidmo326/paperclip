@@ -4,6 +4,13 @@ export const PAGE_ROUTE = "pacc";
 export const PLUGIN_NAMESPACE = "pacc";
 export const TELEMETRY_STATE_KEY = "telemetry.v1";
 export const RESUME_DRAFT_STATE_KEY = "resume-brief-draft.v1";
+/** T-2.6 — per-project freshness report from the weekly hash-rehash job. */
+export const FRESHNESS_STATE_KEY = "freshness.v1";
+/** T-2.6 — per-project source-decay status from the daily decay check. */
+export const SOURCE_DECAY_STATE_KEY = "source-decay.v1";
+
+/** PRD § 15.2 tripwire 7: default stale threshold; per-project override possible later. */
+export const DEFAULT_STALE_THRESHOLD_DAYS = 30;
 
 export const LANE_LABELS = ["lane:product", "lane:customer", "lane:distribution"] as const;
 export const NEXT_ACTION_LABEL = "next-action" as const;
@@ -28,4 +35,8 @@ export const EXPORT_NAMES = {
 
 export const JOB_KEYS = {
   refreshTelemetry: "refresh-telemetry",
+  /** T-2.6 — weekly hash re-grounding (tripwire 2). */
+  staleRehash: "stale-rehash",
+  /** T-2.6 — daily source-decay check (tripwire 7). */
+  sourceDecayCheck: "source-decay-check",
 } as const;

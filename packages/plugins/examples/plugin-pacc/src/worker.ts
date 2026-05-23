@@ -21,6 +21,8 @@ import {
   RESUME_DRAFT_STATE_KEY,
   TELEMETRY_STATE_KEY,
 } from "./constants.js";
+import { runStaleRehash } from "./jobs/stale-rehash.js";
+import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
 
 // ---------------------------------------------------------------------------
 // Stale threshold constants (mirrors control-plane.service.ts)
@@ -349,6 +351,36 @@ const plugin: PaperclipPlugin = definePlugin({
           refreshed,
           skipped,
         });
+      },
+    );
+
+    // -----------------------------------------------------------------------
+    // Job: T-2.6 weekly source hash re-grounding (PRD § 15.2 tripwire 2)
+    // -----------------------------------------------------------------------
+
+    ctx.jobs.register(
+      JOB_KEYS.staleRehash,
+      async (job: PluginJobContext): Promise<void> => {
+        ctx.logger.info("Running stale-rehash job", {
+          runId: job.runId,
+          trigger: job.trigger,
+        });
+        await runStaleRehash(ctx);
+      },
+    );
+
+    // -----------------------------------------------------------------------
+    // Job: T-2.6 daily source-decay check (PRD § 15.2 tripwire 7)
+    // -----------------------------------------------------------------------
+
+    ctx.jobs.register(
+      JOB_KEYS.sourceDecayCheck,
+      async (job: PluginJobContext): Promise<void> => {
+        ctx.logger.info("Running source-decay-check job", {
+          runId: job.runId,
+          trigger: job.trigger,
+        });
+        await runSourceDecayCheck(ctx);
       },
     );
 

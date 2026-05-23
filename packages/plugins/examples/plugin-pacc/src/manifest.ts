@@ -26,6 +26,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "plugin.state.read",
     "plugin.state.write",
     "events.subscribe",
+    "events.emit",
     "jobs.schedule",
     "ui.sidebar.register",
     "ui.page.register",
@@ -44,6 +45,20 @@ const manifest: PaperclipPluginManifestV1 = {
       description:
         "Iterates all active projects across all companies and refreshes their telemetry snapshot in plugin state.",
       schedule: "0 */4 * * *",
+    },
+    {
+      jobKey: JOB_KEYS.staleRehash,
+      displayName: "Weekly Source Hash Re-grounding",
+      description:
+        "T-2.6 / tripwire 2: re-hashes every M1 source cited by an M2 row and flags drift in plugin_state[freshness.v1].",
+      schedule: "0 6 * * 1", // Mondays 06:00
+    },
+    {
+      jobKey: JOB_KEYS.sourceDecayCheck,
+      displayName: "Daily Source Decay Check",
+      description:
+        "T-2.6 / tripwire 7: for each project, emits project.source_decay when the most-recently-touched M1 source exceeds the project's stale threshold (default 30 days).",
+      schedule: "0 7 * * *", // 07:00 daily
     },
   ],
   ui: {
