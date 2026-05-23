@@ -8,6 +8,8 @@ export const RESUME_DRAFT_STATE_KEY = "resume-brief-draft.v1";
 export const FRESHNESS_STATE_KEY = "freshness.v1";
 /** T-2.6 — per-project source-decay status from the daily decay check. */
 export const SOURCE_DECAY_STATE_KEY = "source-decay.v1";
+/** T-2.7 — per-project conflict map. Keyed by field path; quarantines agent writes. */
+export const CONFLICTS_STATE_KEY = "conflicts.v1";
 
 /** PRD § 15.2 tripwire 7: default stale threshold; per-project override possible later. */
 export const DEFAULT_STALE_THRESHOLD_DAYS = 30;
