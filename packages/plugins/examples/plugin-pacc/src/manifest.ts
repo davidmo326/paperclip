@@ -60,6 +60,13 @@ const manifest: PaperclipPluginManifestV1 = {
         "T-2.6 / tripwire 7: for each project, emits project.source_decay when the most-recently-touched M1 source exceeds the project's stale threshold (default 30 days).",
       schedule: "0 7 * * *", // 07:00 daily
     },
+    {
+      jobKey: JOB_KEYS.briefDaily,
+      displayName: "Daily Operating Brief",
+      description:
+        "T-3.6 / PRD § 13.1: produces the day's operating brief and writes it to Obsidian (00_Daily/Daily Brief - YYYY-MM-DD.md). Overlap-guarded via plugin_state advisory lock; idempotent Obsidian write so re-runs on the same day produce no diff.",
+      schedule: "0 8 * * *", // 08:00 local daily
+    },
   ],
   ui: {
     slots: [

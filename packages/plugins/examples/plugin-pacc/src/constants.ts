@@ -10,6 +10,10 @@ export const FRESHNESS_STATE_KEY = "freshness.v1";
 export const SOURCE_DECAY_STATE_KEY = "source-decay.v1";
 /** T-2.7 — per-project conflict map. Keyed by field path; quarantines agent writes. */
 export const CONFLICTS_STATE_KEY = "conflicts.v1";
+/** T-3.6 — advisory lock for the scheduled-brief overlap guard. */
+export const BRIEF_IN_PROGRESS_STATE_KEY = "brief-in-progress.v1";
+/** T-3.6 — most recent brief metadata (date, path, byteLength). For startup catch-up + history. */
+export const BRIEF_LAST_RUN_STATE_KEY = "brief-last-run.v1";
 
 /** PRD § 15.2 tripwire 7: default stale threshold; per-project override possible later. */
 export const DEFAULT_STALE_THRESHOLD_DAYS = 30;
@@ -41,4 +45,6 @@ export const JOB_KEYS = {
   staleRehash: "stale-rehash",
   /** T-2.6 — daily source-decay check (tripwire 7). */
   sourceDecayCheck: "source-decay-check",
+  /** T-3.6 — daily operating brief at 08:00 local. */
+  briefDaily: "brief-daily",
 } as const;
