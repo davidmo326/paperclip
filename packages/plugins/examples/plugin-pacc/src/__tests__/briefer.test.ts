@@ -290,12 +290,13 @@ describe("runBriefer — happy path", () => {
     expect(brief.recommendedFocus?.projectId).toBe("p-1");
   });
 
-  it("surfaces a doNotRethink alert when nextAction overlaps", async () => {
+  it("surfaces a doNotRethink alert when nextAction overlaps (T-3.5 Jaccard ≥ 0.4)", async () => {
     state.projects = [
       projectInput("p-1", makeCard("p-1", {
         cpsPatch: {
-          doNotRethink: "We are sticking with the embedded postgres database approach.",
-          nextSmallestAction: "Re-evaluate database choice between postgres and sqlite.",
+          // Tight token overlap clears the 0.4 Jaccard threshold T-3.5 enforces.
+          doNotRethink: "Settled: postgres database choice.",
+          nextSmallestAction: "Reconsider postgres database choice sqlite.",
         },
       })),
     ];

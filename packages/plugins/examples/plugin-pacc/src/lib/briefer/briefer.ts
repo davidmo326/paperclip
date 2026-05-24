@@ -23,6 +23,10 @@ import type {
   StaleRollupRow,
 } from "./types.js";
 import { assertBrieferL1 } from "./types.js";
+import {
+  checkDoNotRethink,
+  type RethinkConflict,
+} from "./do-not-rethink.js";
 
 /** Default model for the briefer per PRD § 7.5 (configurable per principal). */
 export const BRIEFER_DEFAULT_MODEL = "claude-opus-4-7";
@@ -188,34 +192,24 @@ function computeStaleRollup(projects: readonly BrieferProjectInput[]): StaleRoll
 function computeDoNotRethinkAlerts(
   projects: readonly BrieferProjectInput[],
 ): DoNotRethinkAlert[] {
+  // T-3.5: Jaccard similarity check (threshold 0.4) against each entry in
+  // the project's doNotRethink list. Replaces T-3.1's naive keyword overlap.
   const alerts: DoNotRethinkAlert[] = [];
   for (const p of projects) {
     const dnr = p.card.doNotRethink.answer;
     const next = p.card.nextActions.answer;
     if (!dnr || !next) continue;
 
-    // Naive keyword overlap — T-3.5 will replace with a real semantic check.
-    const dnrWords = new Set(
-      dnr
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((w) => w.length > 4),
-    );
-    const nextWords = new Set(
-      next
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((w) => w.length > 4),
-    );
-    let overlap = 0;
-    for (const w of dnrWords) if (nextWords.has(w)) overlap += 1;
-
-    if (overlap >= 2) {
+    const conflicts: RethinkConflict[] = checkDoNotRethink({
+      proposalText: next,
+      doNotRethink: dnr,
+    });
+    for (const c of conflicts) {
       alerts.push({
         projectId: p.projectId,
         projectName: p.projectName,
-        settledDecision: dnr,
-        conflictingAction: next,
+        settledDecision: c.settledDecision,
+        conflictingAction: c.proposalText,
       });
     }
   }
