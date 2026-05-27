@@ -14,6 +14,12 @@ export const CONFLICTS_STATE_KEY = "conflicts.v1";
 export const BRIEF_IN_PROGRESS_STATE_KEY = "brief-in-progress.v1";
 /** T-3.6 — most recent brief metadata (date, path, byteLength). For startup catch-up + history. */
 export const BRIEF_LAST_RUN_STATE_KEY = "brief-last-run.v1";
+/** T-3.6 — stored Brief object keyed by date (instance scope, namespace=brief-date). */
+export const BRIEF_STORE_STATE_KEY = "brief.v1";
+/** T-3.7 — rolling 24h hallucination flag counter (instance scope). */
+export const HALLUCINATION_FLAGS_STATE_KEY = "hallucination-flags.v1";
+/** T-3.7 — briefer self-pause flag (instance scope). */
+export const BRIEFER_PAUSED_STATE_KEY = "briefer-paused.v1";
 
 /** PRD § 15.2 tripwire 7: default stale threshold; per-project override possible later. */
 export const DEFAULT_STALE_THRESHOLD_DAYS = 30;

@@ -45,11 +45,16 @@ const SLUG_PATTERN = /\b[a-z0-9]+-[a-z0-9-]+\b/g;
  * Extract ID-shaped tokens from text. Returns unique tokens (dedup'd by
  * lowercase) so each token gets counted only once per scan.
  */
+/** ISO calendar dates (YYYY-MM-DD) are slug-shaped but never IDs — excluded. */
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
 export function extractIdLikeTokens(text: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
 
   const push = (raw: string) => {
+    // Dates look like slugs but are never project/decision IDs.
+    if (DATE_PATTERN.test(raw)) return;
     const key = raw.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);

@@ -30,6 +30,15 @@ import {
   type AcquireLockResult,
   type OverlapGuardStore,
 } from "./overlap-guard.js";
+import {
+  annotateHallucinations,
+  appendFlag,
+  detectHallucinations,
+  pausedBriefMarkdown,
+  pruneOldFlags,
+  shouldPause,
+  type HallucinationCounterState,
+} from "./hallucination.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -37,6 +46,30 @@ import {
 
 /** Event the orchestrator emits on a successful brief generation. */
 export const BRIEF_GENERATED_EVENT = "steward.brief.generated";
+/** Event emitted per hallucinated reference detected in a brief (T-3.7). */
+export const HALLUCINATION_FLAG_EVENT = "agent.hallucination_flag";
+/** Event emitted when the briefer self-pauses (T-3.7). */
+export const SELF_PAUSED_EVENT = "agent.self_paused";
+
+/**
+ * Optional hallucination-tripwire wiring (T-3.7). When provided, the
+ * orchestrator: (1) checks the pause flag before running, writing a stub
+ * brief if paused; (2) scans the rendered Markdown for unknown IDs after
+ * running, annotating + recording flags + self-pausing at threshold.
+ */
+export interface HallucinationDeps {
+  /** Canonical IDs the briefer was given — used to validate references. */
+  knownIds: ReadonlySet<string>;
+  /** Read/write the rolling 24h flag counter (plugin_state). */
+  readFlags(): Promise<HallucinationCounterState | null>;
+  writeFlags(state: HallucinationCounterState): Promise<void>;
+  /** Read/write the self-pause flag (plugin_state). */
+  isPaused(): Promise<{ paused: boolean; reason: string | null }>;
+  setPaused(reason: string): Promise<void>;
+  /** Optional override for the rolling window + threshold (defaults from hallucination.ts). */
+  windowMs?: number;
+  pauseThreshold?: number;
+}
 
 export interface ScheduledBriefDeps {
   /** The briefer's own deps (T-3.1). */
@@ -55,6 +88,8 @@ export interface ScheduledBriefDeps {
     warn(msg: string, fields?: Record<string, unknown>): void;
     error?(msg: string, fields?: Record<string, unknown>): void;
   };
+  /** Optional T-3.7 hallucination tripwire. Omit to disable the check. */
+  hallucination?: HallucinationDeps;
 }
 
 export interface RunScheduledBriefOptions {
@@ -79,12 +114,22 @@ export type ScheduledBriefResult =
       brief: Brief;
       obsidianWrite: ObsidianBriefWriteResult;
       lockOutcome: Extract<AcquireLockResult, { acquired: true }>;
+      /** Count of hallucinated references detected this run (T-3.7). */
+      hallucinationFlagCount: number;
+      /** True if this run tripped the self-pause threshold. */
+      selfPaused: boolean;
     }
   | {
       kind: "skipped_overlap";
       reason: string;
       existingLock: Extract<AcquireLockResult, { acquired: false }>["existingLock"];
       ageMs: number;
+    }
+  | {
+      /** Briefer is self-paused (T-3.7); a stub brief was written instead. */
+      kind: "skipped_paused";
+      reason: string;
+      obsidianWrite: ObsidianBriefWriteResult;
     }
   | {
       kind: "failed";
@@ -106,6 +151,27 @@ export async function runScheduledBrief(
 ): Promise<ScheduledBriefResult> {
   const now = options.now ?? new Date();
   const obsidianBaseDir = options.obsidianBaseDir ?? DEFAULT_OBSIDIAN_DIR;
+  const briefDate = now.toISOString().slice(0, 10);
+
+  // 0. Self-pause check (T-3.7). If the briefer is paused, write a stub
+  //    brief to Obsidian and skip the run entirely.
+  if (deps.hallucination) {
+    const pauseState = await deps.hallucination.isPaused();
+    if (pauseState.paused) {
+      const reason = pauseState.reason ?? "hallucination self-pause";
+      const stub = pausedBriefMarkdown(briefDate, reason);
+      const obsidianWrite = await writeObsidianBrief(stub, {
+        baseDir: obsidianBaseDir,
+        briefDate,
+      });
+      deps.logger.warn("scheduled brief: briefer is self-paused; wrote stub", {
+        runId: options.runId,
+        reason,
+        path: obsidianWrite.path,
+      });
+      return { kind: "skipped_paused", reason, obsidianWrite };
+    }
+  }
 
   // 1. Acquire overlap-guard lock.
   const lockResult = await acquireLock(deps.lock, {
@@ -142,9 +208,58 @@ export async function runScheduledBrief(
     });
 
     // 3. Render to Markdown.
-    const markdown = renderBriefMarkdown(brief);
+    let markdown = renderBriefMarkdown(brief);
 
-    // 4. Idempotent Obsidian write.
+    // 3b. Hallucination tripwire (T-3.7): scan rendered Markdown for
+    //     unknown ID references, annotate + record flags + maybe self-pause.
+    let hallucinationFlagCount = 0;
+    let selfPaused = false;
+    if (deps.hallucination) {
+      const flags = detectHallucinations({
+        briefMarkdown: markdown,
+        knownIds: deps.hallucination.knownIds,
+      });
+      hallucinationFlagCount = flags.length;
+      if (flags.length > 0) {
+        markdown = annotateHallucinations(markdown, flags);
+        // Emit one event per flagged reference.
+        for (const flag of flags) {
+          await deps.emitEvent(HALLUCINATION_FLAG_EVENT, {
+            briefDate: brief.briefDate,
+            reference: flag.reference,
+            kind: flag.kind,
+            excerpt: flag.excerpt,
+            runId: options.runId ?? null,
+          });
+        }
+        // Record + evaluate the rolling-window counter.
+        const prior = await deps.hallucination.readFlags();
+        const updated = appendFlag(
+          prior,
+          { at: now.toISOString(), briefDate: brief.briefDate, refs: flags.map((f) => f.reference) },
+          now,
+          deps.hallucination.windowMs,
+        );
+        await deps.hallucination.writeFlags(updated);
+        const inWindow = pruneOldFlags(updated, now, deps.hallucination.windowMs);
+        if (shouldPause(inWindow, deps.hallucination.pauseThreshold)) {
+          selfPaused = true;
+          const reason = `${inWindow.length} hallucination flags within window`;
+          await deps.hallucination.setPaused(reason);
+          await deps.emitEvent(SELF_PAUSED_EVENT, {
+            reason,
+            flagCount: inWindow.length,
+            runId: options.runId ?? null,
+          });
+          deps.logger.warn("scheduled brief: self-paused on hallucination threshold", {
+            runId: options.runId,
+            flagCount: inWindow.length,
+          });
+        }
+      }
+    }
+
+    // 4. Idempotent Obsidian write (annotated markdown if flags were found).
     const obsidianWrite = await writeObsidianBrief(markdown, {
       baseDir: obsidianBaseDir,
       briefDate: brief.briefDate,
@@ -164,6 +279,7 @@ export async function runScheduledBrief(
       obsidianPath: obsidianWrite.path,
       obsidianWriteKind: obsidianWrite.kind,
       byteLength: obsidianWrite.byteLength,
+      hallucinationFlagCount,
       runId: options.runId ?? null,
     });
 
@@ -172,6 +288,8 @@ export async function runScheduledBrief(
       brief,
       obsidianWrite,
       lockOutcome: lockResult,
+      hallucinationFlagCount,
+      selfPaused,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -66,7 +66,7 @@ describe("extractIdLikeTokens — UUID + slug detection", () => {
   });
 
   it("doesn't match purely numeric prefixes (years, port numbers)", () => {
-    expect(extractIdLikeTokens("2026-05-22 port 54329 elapsed 30")).toContain("2026-05-22");
+    expect(extractIdLikeTokens("2026-05-22 port 54329 elapsed 30")).not.toContain("2026-05-22");
     // 2026-05-22 IS a slug-shape match; not flagged unless not in knownIds.
     // Year-month-day is acceptable in extraction; detection layer handles it.
   });

@@ -23,6 +23,8 @@ import {
 } from "./constants.js";
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
+import { runScheduledBrief } from "./lib/briefer/scheduled-brief.js";
+import { makeScheduledBriefDeps } from "./lib/briefer/worker-deps.js";
 
 // ---------------------------------------------------------------------------
 // Stale threshold constants (mirrors control-plane.service.ts)
@@ -381,6 +383,33 @@ const plugin: PaperclipPlugin = definePlugin({
           trigger: job.trigger,
         });
         await runSourceDecayCheck(ctx);
+      },
+    );
+
+    // -----------------------------------------------------------------------
+    // Job: T-3.6/T-3.7 daily operating brief (08:00 local)
+    // -----------------------------------------------------------------------
+
+    ctx.jobs.register(
+      JOB_KEYS.briefDaily,
+      async (job: PluginJobContext): Promise<void> => {
+        ctx.logger.info("Running daily-brief job", {
+          runId: job.runId,
+          trigger: job.trigger,
+        });
+        // The plugin SDK exposes no LLM surface yet, so the brief runs in
+        // deterministic offline mode (skipModel). The pause-check (T-3.7)
+        // and overlap guard (T-3.6) are wired via the plugin_state-backed
+        // deps assembled here.
+        const { deps } = await makeScheduledBriefDeps(ctx);
+        const result = await runScheduledBrief(deps, {
+          runId: job.runId,
+          brieferOptions: { skipModel: true },
+        });
+        ctx.logger.info("daily-brief job complete", {
+          runId: job.runId,
+          kind: result.kind,
+        });
       },
     );
 
