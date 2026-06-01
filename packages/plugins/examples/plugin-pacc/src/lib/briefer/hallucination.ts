@@ -104,6 +104,10 @@ const DEFAULT_ALLOW_LIST = new Set<string>([
   "lane-distribution",
   "no-entries",
   "json-build-object",
+  // T-3.10 self-check section structural markers
+  "control-plane",
+  "self-check",
+  "kill-criterion",
 ]);
 
 /**

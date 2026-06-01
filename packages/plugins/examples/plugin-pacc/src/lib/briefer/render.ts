@@ -14,6 +14,10 @@
  */
 
 import type { Brief, JobMixRow, ProposedAction, StaleRollupRow } from "./types.js";
+import {
+  renderSelfCheckSection,
+  type KillCriterionMetric,
+} from "./kill-criterion.js";
 
 export interface RenderBriefOptions {
   /**
@@ -22,6 +26,13 @@ export interface RenderBriefOptions {
    * leaner brief preview.
    */
   omitEmptySectionPlaceholders?: boolean;
+  /**
+   * T-3.10 kill-criterion meter inputs. When provided, the "Control-plane
+   * self-check" section shows 7-day rolling totals + the red-flag line.
+   * When omitted, the section still renders (with a pending-wiring note) so
+   * it's present in every brief.
+   */
+  selfCheck?: { metrics: KillCriterionMetric[]; now: Date };
 }
 
 const EMPTY_PLACEHOLDER = "_no entries_";
@@ -178,6 +189,18 @@ export function renderBriefMarkdown(
     out.push(`- ${EMPTY_PLACEHOLDER}`);
   }
   out.push("");
+
+  // -- Control-plane self-check (T-3.10) ------------------------------------
+  if (options.selfCheck) {
+    for (const line of renderSelfCheckSection(options.selfCheck.metrics, options.selfCheck.now)) {
+      out.push(line);
+    }
+  } else {
+    out.push("## Control-plane self-check");
+    out.push("");
+    out.push("_self-check metrics not wired for this render_");
+    out.push("");
+  }
 
   // -- Human Feedback --------------------------------------------------------
   out.push("## Human Feedback");

@@ -20,6 +20,10 @@ export const BRIEF_STORE_STATE_KEY = "brief.v1";
 export const HALLUCINATION_FLAGS_STATE_KEY = "hallucination-flags.v1";
 /** T-3.7 — briefer self-pause flag (instance scope). */
 export const BRIEFER_PAUSED_STATE_KEY = "briefer-paused.v1";
+/** T-3.9 — captured principal feedback per brief (instance scope, namespace=brief-date). */
+export const BRIEF_FEEDBACK_STATE_KEY = "brief-feedback.v1";
+/** T-3.10 — kill-criterion metric per brief (instance scope, namespace=brief-date). */
+export const KILL_CRITERION_STATE_KEY = "kill-criterion.v1";
 
 /** PRD § 15.2 tripwire 7: default stale threshold; per-project override possible later. */
 export const DEFAULT_STALE_THRESHOLD_DAYS = 30;
