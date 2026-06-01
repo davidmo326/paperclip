@@ -12,6 +12,7 @@
  *   - plugin_state-backed brief storage (saveBrief)
  *   - ContextCard assembly from live projects + the T-2.6/T-2.7 overlays
  *   - job-mix from per-project jobClassificationDominant fallback (T-3.4)
+ *   - plugin_state-backed kill-criterion metrics + self-check render (T-3.10)
  *
  * What's NOT wired (documented gaps — the plugin SDK doesn't expose them):
  *   - callModel: the plugin SDK has no LLM surface. The briefer runs in
@@ -33,6 +34,7 @@ import {
   CONFLICTS_STATE_KEY,
   FRESHNESS_STATE_KEY,
   HALLUCINATION_FLAGS_STATE_KEY,
+  KILL_CRITERION_STATE_KEY,
   PLUGIN_NAMESPACE,
   SOURCE_DECAY_STATE_KEY,
   BRIEF_IN_PROGRESS_STATE_KEY,
@@ -46,7 +48,12 @@ import type { OverlapGuardStore, BriefInProgressLock } from "./overlap-guard.js"
 import type {
   HallucinationCounterState,
 } from "./hallucination.js";
-import type { HallucinationDeps, ScheduledBriefDeps } from "./scheduled-brief.js";
+import type {
+  HallucinationDeps,
+  KillCriterionDeps,
+  ScheduledBriefDeps,
+} from "./scheduled-brief.js";
+import type { KillCriterionMetric } from "./kill-criterion.js";
 
 // ---------------------------------------------------------------------------
 // Minimal ctx surface
@@ -157,6 +164,31 @@ export function makeHallucinationDeps(
 }
 
 // ---------------------------------------------------------------------------
+// Kill-criterion meter deps (T-3.10)
+// ---------------------------------------------------------------------------
+
+/**
+ * Metrics live as a single instance-scoped map keyed by briefDate, so
+ * `readAllMetrics` needs no key enumeration (the plugin_state API has no
+ * list-by-prefix).
+ */
+export function makeKillCriterionDeps(ctx: WorkerCtx): KillCriterionDeps {
+  const key = instanceKey(KILL_CRITERION_STATE_KEY);
+  return {
+    async readAllMetrics() {
+      const map = (await ctx.state.get(key)) as Record<string, KillCriterionMetric> | null;
+      return map ? Object.values(map) : [];
+    },
+    async writeMetric(metric) {
+      const map =
+        ((await ctx.state.get(key)) as Record<string, KillCriterionMetric> | null) ?? {};
+      map[metric.briefDate] = metric;
+      await ctx.state.set(key, map);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // ContextCard assembly from live projects + overlays
 // ---------------------------------------------------------------------------
 
@@ -259,6 +291,7 @@ export async function makeScheduledBriefDeps(
     },
     logger: ctx.logger,
     hallucination: makeHallucinationDeps(ctx, knownIds),
+    killCriterion: makeKillCriterionDeps(ctx),
   };
 
   return { deps, eventCompanyId };

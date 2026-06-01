@@ -39,6 +39,10 @@ import {
   shouldPause,
   type HallucinationCounterState,
 } from "./hallucination.js";
+import {
+  initMetric,
+  type KillCriterionMetric,
+} from "./kill-criterion.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -90,6 +94,21 @@ export interface ScheduledBriefDeps {
   };
   /** Optional T-3.7 hallucination tripwire. Omit to disable the check. */
   hallucination?: HallucinationDeps;
+  /**
+   * Optional T-3.10 kill-criterion meter. When provided, the orchestrator
+   * persists a metric for this brief (idempotent: a same-day re-run keeps the
+   * accepted/J1 counts and only refreshes suggestionsCount) and threads the
+   * full metric history into the render so the "Control-plane self-check"
+   * section shows real 7-day rolling totals + the gate red-flag.
+   */
+  killCriterion?: KillCriterionDeps;
+}
+
+export interface KillCriterionDeps {
+  /** Read every persisted metric (one per brief, keyed by briefDate). */
+  readAllMetrics(): Promise<KillCriterionMetric[]>;
+  /** Upsert the metric for one brief (keyed by briefDate). */
+  writeMetric(metric: KillCriterionMetric): Promise<void>;
 }
 
 export interface RunScheduledBriefOptions {
@@ -207,8 +226,30 @@ export async function runScheduledBrief(
       now,
     });
 
+    // 2b. Kill-criterion metric (T-3.10): persist a metric for this brief and
+    //     gather history so the self-check section renders real totals.
+    //     Idempotent — a same-day re-run preserves accepted/J1 (which feedback
+    //     bumps) and only refreshes the suggestion count.
+    let selfCheck: { metrics: KillCriterionMetric[]; now: Date } | undefined;
+    if (deps.killCriterion) {
+      const suggestionsCount =
+        brief.highLeverageActions.length + brief.backlogCandidates.length;
+      const existing = await deps.killCriterion.readAllMetrics();
+      const priorForDate = existing.find((m) => m.briefDate === brief.briefDate);
+      const metric: KillCriterionMetric =
+        priorForDate ?
+          { ...priorForDate, suggestionsCount }
+        : initMetric(brief.briefDate, suggestionsCount);
+      await deps.killCriterion.writeMetric(metric);
+      const merged = [
+        ...existing.filter((m) => m.briefDate !== brief.briefDate),
+        metric,
+      ];
+      selfCheck = { metrics: merged, now };
+    }
+
     // 3. Render to Markdown.
-    let markdown = renderBriefMarkdown(brief);
+    let markdown = renderBriefMarkdown(brief, selfCheck ? { selfCheck } : {});
 
     // 3b. Hallucination tripwire (T-3.7): scan rendered Markdown for
     //     unknown ID references, annotate + record flags + maybe self-pause.

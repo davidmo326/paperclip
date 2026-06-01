@@ -17,7 +17,9 @@ import {
   checkMissedRun,
   runScheduledBrief,
   type ScheduledBriefDeps,
+  type KillCriterionDeps,
 } from "../lib/briefer/scheduled-brief.js";
+import type { KillCriterionMetric } from "../lib/briefer/kill-criterion.js";
 import type {
   Brief,
   BrieferDeps,
@@ -376,6 +378,71 @@ describe("checkMissedRun", () => {
     });
     expect(result.shouldRun).toBe(true);
     await rm(isolated, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. Kill-criterion meter wiring (T-3.10 convergence)
+// ---------------------------------------------------------------------------
+
+class InMemoryKillCriterion implements KillCriterionDeps {
+  map = new Map<string, KillCriterionMetric>();
+  async readAllMetrics() {
+    return [...this.map.values()];
+  }
+  async writeMetric(m: KillCriterionMetric) {
+    this.map.set(m.briefDate, m);
+  }
+}
+
+describe("runScheduledBrief — kill-criterion wiring", () => {
+  it("persists a metric for the brief and renders the self-check section", async () => {
+    state.briefer.projects = [projectInput("p-1")];
+    const meter = new InMemoryKillCriterion();
+    const deps: ScheduledBriefDeps = { ...makeDeps(state), killCriterion: meter };
+
+    const result = await runScheduledBrief(deps, {
+      now: NOW,
+      runId: "run-kc-1",
+      obsidianBaseDir: workdir,
+      brieferOptions: { skipModel: true },
+    });
+    expect(result.kind).toBe("completed");
+
+    const metric = meter.map.get("2026-05-22");
+    expect(metric).toBeDefined();
+    expect(metric?.acceptedCount).toBe(0);
+    expect(metric?.j1CompletedCount).toBe(0);
+
+    if (result.kind === "completed") {
+      const md = await readFile(result.obsidianWrite.path, "utf8");
+      expect(md).toContain("## Control-plane self-check");
+      expect(md).toContain("- Briefs (last 7d): 1");
+    }
+  });
+
+  it("is idempotent on same-day re-run: preserves accepted/J1, refreshes suggestions", async () => {
+    state.briefer.projects = [projectInput("p-1")];
+    const meter = new InMemoryKillCriterion();
+    meter.map.set("2026-05-22", {
+      briefDate: "2026-05-22",
+      suggestionsCount: 99,
+      acceptedCount: 3,
+      j1CompletedCount: 2,
+    });
+    const deps: ScheduledBriefDeps = { ...makeDeps(state), killCriterion: meter };
+
+    await runScheduledBrief(deps, {
+      now: NOW,
+      runId: "run-kc-2",
+      obsidianBaseDir: workdir,
+      brieferOptions: { skipModel: true },
+    });
+
+    const metric = meter.map.get("2026-05-22");
+    expect(metric?.acceptedCount).toBe(3);
+    expect(metric?.j1CompletedCount).toBe(2);
+    expect(metric?.suggestionsCount).not.toBe(99);
   });
 });
 
