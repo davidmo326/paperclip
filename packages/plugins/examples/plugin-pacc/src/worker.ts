@@ -397,14 +397,20 @@ const plugin: PaperclipPlugin = definePlugin({
           runId: job.runId,
           trigger: job.trigger,
         });
-        // The plugin SDK exposes no LLM surface yet, so the brief runs in
-        // deterministic offline mode (skipModel). The pause-check (T-3.7)
-        // and overlap guard (T-3.6) are wired via the plugin_state-backed
-        // deps assembled here.
-        const { deps } = await makeScheduledBriefDeps(ctx);
+        // Model wiring: when PACC_BRIEFER_MODEL is set, the briefer generates
+        // its narrative via the local Claude Code CLI (subscription auth — no
+        // API key). Unset → deterministic offline brief. Either way the
+        // pause-check (T-3.7), overlap guard (T-3.6), and kill-criterion meter
+        // (T-3.10) are wired via the plugin_state-backed deps assembled here.
+        const { deps, model } = await makeScheduledBriefDeps(ctx);
+        ctx.logger.info("daily-brief model mode", {
+          runId: job.runId,
+          modelEnabled: model.enabled,
+          modelId: model.modelId,
+        });
         const result = await runScheduledBrief(deps, {
           runId: job.runId,
-          brieferOptions: { skipModel: true },
+          brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
         });
         ctx.logger.info("daily-brief job complete", {
           runId: job.runId,

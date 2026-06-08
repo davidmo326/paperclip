@@ -54,6 +54,7 @@ import type {
   ScheduledBriefDeps,
 } from "./scheduled-brief.js";
 import type { KillCriterionMetric } from "./kill-criterion.js";
+import { callModelViaClaudeCli } from "./model-claude-cli.js";
 
 // ---------------------------------------------------------------------------
 // Minimal ctx surface
@@ -235,7 +236,11 @@ export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProje
 // Briefer deps
 // ---------------------------------------------------------------------------
 
-export function makeBrieferDeps(ctx: WorkerCtx, cards: BrieferProjectInput[]): BrieferDeps {
+export function makeBrieferDeps(
+  ctx: WorkerCtx,
+  cards: BrieferProjectInput[],
+  callModel?: BrieferDeps["callModel"],
+): BrieferDeps {
   return {
     async listActiveProjectCards() {
       return cards;
@@ -251,12 +256,52 @@ export function makeBrieferDeps(ctx: WorkerCtx, cards: BrieferProjectInput[]): B
       );
       return { id: `brief-${brief.briefDate}` };
     },
-    async callModel() {
-      // No LLM surface in the plugin SDK yet. Returning null text makes the
-      // briefer fall back to its deterministic offline summary. When a model
-      // gateway lands, replace this with a real call.
-      return { text: null, sessionId: null };
-    },
+    callModel:
+      callModel ??
+      // Default: no model wired → null text → deterministic offline summary.
+      (async () => ({ text: null, sessionId: null })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Briefer model config (subscription-auth Claude CLI)
+// ---------------------------------------------------------------------------
+
+export interface BrieferModelConfig {
+  /** True when a model id is configured (PACC_BRIEFER_MODEL). */
+  enabled: boolean;
+  /** Resolved model id, or null when offline. */
+  modelId: string | null;
+  /** Concrete callModel impl (claude CLI when enabled, else offline-null). */
+  callModel: BrieferDeps["callModel"];
+}
+
+/**
+ * Resolve the briefer's model wiring from the environment.
+ *
+ *   PACC_BRIEFER_MODEL  — set to a Claude model id (e.g. claude-opus-4-8) to
+ *                         enable narrative generation via the local Claude
+ *                         Code CLI (subscription auth — no API key). Unset →
+ *                         deterministic offline briefs.
+ *   PACC_CLAUDE_BIN     — optional override for the `claude` binary path.
+ *   PACC_BRIEFER_MODEL_TIMEOUT_MS — optional call timeout (default 120000).
+ */
+export function resolveBrieferModelConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  logger?: { warn(msg: string, fields?: Record<string, unknown>): void },
+): BrieferModelConfig {
+  const modelId = env.PACC_BRIEFER_MODEL?.trim();
+  if (!modelId) {
+    return { enabled: false, modelId: null, callModel: async () => ({ text: null, sessionId: null }) };
+  }
+  const binPath = env.PACC_CLAUDE_BIN?.trim() || undefined;
+  const timeoutMs = env.PACC_BRIEFER_MODEL_TIMEOUT_MS
+    ? Number(env.PACC_BRIEFER_MODEL_TIMEOUT_MS)
+    : undefined;
+  return {
+    enabled: true,
+    modelId,
+    callModel: (args) => callModelViaClaudeCli(args, { binPath, timeoutMs, logger }),
   };
 }
 
@@ -268,6 +313,8 @@ export interface MakeScheduledBriefDepsResult {
   deps: ScheduledBriefDeps;
   /** companyId used for event emission (first company, or 'instance' if none). */
   eventCompanyId: string;
+  /** Resolved model wiring — worker uses this to set skipModel/modelId. */
+  model: BrieferModelConfig;
 }
 
 export async function makeScheduledBriefDeps(
@@ -283,8 +330,10 @@ export async function makeScheduledBriefDeps(
     knownIds.add(c.projectName);
   }
 
+  const model = resolveBrieferModelConfig(process.env, ctx.logger);
+
   const deps: ScheduledBriefDeps = {
-    briefer: makeBrieferDeps(ctx, cards),
+    briefer: makeBrieferDeps(ctx, cards, model.callModel),
     lock: makeOverlapStore(ctx),
     async emitEvent(name, payload) {
       await ctx.events.emit(name, eventCompanyId, payload);
@@ -294,5 +343,5 @@ export async function makeScheduledBriefDeps(
     killCriterion: makeKillCriterionDeps(ctx),
   };
 
-  return { deps, eventCompanyId };
+  return { deps, eventCompanyId, model };
 }

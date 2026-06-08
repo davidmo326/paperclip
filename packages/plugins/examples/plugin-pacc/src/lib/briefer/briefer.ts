@@ -29,7 +29,7 @@ import {
 } from "./do-not-rethink.js";
 
 /** Default model for the briefer per PRD § 7.5 (configurable per principal). */
-export const BRIEFER_DEFAULT_MODEL = "claude-opus-4-7";
+export const BRIEFER_DEFAULT_MODEL = "claude-opus-4-8";
 
 /** The briefer's actor identifier. Threaded into every write/propose. */
 export const BRIEFER_ACTOR = "agent:briefer";
