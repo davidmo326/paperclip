@@ -156,12 +156,32 @@ describe("resolveBrieferModelConfig", () => {
     });
   });
 
-  it("is enabled with a model id when PACC_BRIEFER_MODEL is set", () => {
+  it("is enabled with an explicit model id", () => {
     const cfg = resolveBrieferModelConfig({
-      PACC_BRIEFER_MODEL: "claude-sonnet-4-6",
+      PACC_BRIEFER_MODEL: "claude-opus-4-8",
     } as unknown as NodeJS.ProcessEnv);
     expect(cfg.enabled).toBe(true);
-    expect(cfg.modelId).toBe("claude-sonnet-4-6");
+    expect(cfg.modelId).toBe("claude-opus-4-8");
     expect(typeof cfg.callModel).toBe("function");
+  });
+
+  it("enables with the default model (Sonnet 4.6) for an `on`-style switch", () => {
+    for (const v of ["on", "true", "1", "default", "yes"]) {
+      const cfg = resolveBrieferModelConfig({
+        PACC_BRIEFER_MODEL: v,
+      } as unknown as NodeJS.ProcessEnv);
+      expect(cfg.enabled).toBe(true);
+      expect(cfg.modelId).toBe("claude-sonnet-4-6");
+    }
+  });
+
+  it("stays offline for an explicit off-style value", () => {
+    for (const v of ["off", "false", "0", "none", "no"]) {
+      const cfg = resolveBrieferModelConfig({
+        PACC_BRIEFER_MODEL: v,
+      } as unknown as NodeJS.ProcessEnv);
+      expect(cfg.enabled).toBe(false);
+      expect(cfg.modelId).toBeNull();
+    }
   });
 });

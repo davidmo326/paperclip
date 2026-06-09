@@ -28,8 +28,12 @@ import {
   type RethinkConflict,
 } from "./do-not-rethink.js";
 
-/** Default model for the briefer per PRD § 7.5 (configurable per principal). */
-export const BRIEFER_DEFAULT_MODEL = "claude-opus-4-8";
+/**
+ * Default model for the briefer (configurable per principal). Sonnet 4.6 is
+ * the chosen default — a good quality/usage balance for a once-daily brief on
+ * the Claude subscription. Override with PACC_BRIEFER_MODEL=<model-id>.
+ */
+export const BRIEFER_DEFAULT_MODEL = "claude-sonnet-4-6";
 
 /** The briefer's actor identifier. Threaded into every write/propose. */
 export const BRIEFER_ACTOR = "agent:briefer";

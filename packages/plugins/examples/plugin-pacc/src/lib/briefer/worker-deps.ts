@@ -55,6 +55,7 @@ import type {
 } from "./scheduled-brief.js";
 import type { KillCriterionMetric } from "./kill-criterion.js";
 import { callModelViaClaudeCli } from "./model-claude-cli.js";
+import { BRIEFER_DEFAULT_MODEL } from "./briefer.js";
 
 // ---------------------------------------------------------------------------
 // Minimal ctx surface
@@ -279,10 +280,14 @@ export interface BrieferModelConfig {
 /**
  * Resolve the briefer's model wiring from the environment.
  *
- *   PACC_BRIEFER_MODEL  — set to a Claude model id (e.g. claude-opus-4-8) to
- *                         enable narrative generation via the local Claude
- *                         Code CLI (subscription auth — no API key). Unset →
- *                         deterministic offline briefs.
+ *   PACC_BRIEFER_MODEL  — enable narrative generation via the local Claude
+ *                         Code CLI (subscription auth — no API key). Accepts:
+ *                           - `on` / `true` / `1` / `default` / `yes`
+ *                             → enabled with BRIEFER_DEFAULT_MODEL (Sonnet 4.6)
+ *                           - a Claude model id (e.g. claude-opus-4-8)
+ *                             → enabled with that model
+ *                           - unset / `off` / `false` / `0` / `none`
+ *                             → deterministic offline briefs
  *   PACC_CLAUDE_BIN     — optional override for the `claude` binary path.
  *   PACC_BRIEFER_MODEL_TIMEOUT_MS — optional call timeout (default 120000).
  */
@@ -290,10 +295,21 @@ export function resolveBrieferModelConfig(
   env: NodeJS.ProcessEnv = process.env,
   logger?: { warn(msg: string, fields?: Record<string, unknown>): void },
 ): BrieferModelConfig {
-  const modelId = env.PACC_BRIEFER_MODEL?.trim();
-  if (!modelId) {
-    return { enabled: false, modelId: null, callModel: async () => ({ text: null, sessionId: null }) };
-  }
+  const raw = env.PACC_BRIEFER_MODEL?.trim();
+  const offline: BrieferModelConfig = {
+    enabled: false,
+    modelId: null,
+    callModel: async () => ({ text: null, sessionId: null }),
+  };
+
+  if (!raw) return offline;
+  const lc = raw.toLowerCase();
+  if (["off", "false", "0", "none", "no"].includes(lc)) return offline;
+
+  // `on`-style switches enable with the default model; anything else is a model id.
+  const modelId = ["on", "true", "1", "default", "yes"].includes(lc)
+    ? BRIEFER_DEFAULT_MODEL
+    : raw;
   const binPath = env.PACC_CLAUDE_BIN?.trim() || undefined;
   const timeoutMs = env.PACC_BRIEFER_MODEL_TIMEOUT_MS
     ? Number(env.PACC_BRIEFER_MODEL_TIMEOUT_MS)
