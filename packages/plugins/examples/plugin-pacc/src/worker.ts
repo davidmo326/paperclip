@@ -24,7 +24,8 @@ import {
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
 import { runScheduledBrief } from "./lib/briefer/scheduled-brief.js";
-import { makeScheduledBriefDeps } from "./lib/briefer/worker-deps.js";
+import { makeScheduledBriefDeps, makeCaptureFeedbackDeps } from "./lib/briefer/worker-deps.js";
+import { captureBriefFeedback } from "./lib/briefer/capture-feedback.js";
 
 // ---------------------------------------------------------------------------
 // Stale threshold constants (mirrors control-plane.service.ts)
@@ -488,6 +489,23 @@ const plugin: PaperclipPlugin = definePlugin({
       await refreshProjectTelemetry(ctx, companyId, projectId);
       await generateResumeDraft(ctx, companyId, projectId);
       return { ok: true };
+    });
+
+    // T-3.9: capture principal feedback from an edited brief. The CLI
+    // (`pacc brief --feedback`) reads the edited Obsidian brief Markdown and
+    // POSTs it here; we parse it, persist the feedback row, and fold the
+    // accepted count into the kill-criterion meter.
+    ctx.actions.register("capture-brief-feedback", async (params) => {
+      const briefDate = typeof params.briefDate === "string" ? params.briefDate : "";
+      const markdown = typeof params.markdown === "string" ? params.markdown : "";
+      if (!briefDate || !markdown) {
+        throw new Error("briefDate and markdown are required");
+      }
+      const result = await captureBriefFeedback(makeCaptureFeedbackDeps(ctx), {
+        briefDate,
+        markdown,
+      });
+      return result;
     });
 
     ctx.logger.info("pacc plugin setup complete");

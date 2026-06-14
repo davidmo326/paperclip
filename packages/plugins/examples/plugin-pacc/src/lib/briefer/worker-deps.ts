@@ -30,6 +30,7 @@
 
 import {
   BRIEFER_PAUSED_STATE_KEY,
+  BRIEF_FEEDBACK_STATE_KEY,
   BRIEF_STORE_STATE_KEY,
   CONFLICTS_STATE_KEY,
   FRESHNESS_STATE_KEY,
@@ -56,6 +57,8 @@ import type {
 import type { KillCriterionMetric } from "./kill-criterion.js";
 import { callModelViaClaudeCli } from "./model-claude-cli.js";
 import { BRIEFER_DEFAULT_MODEL } from "./briefer.js";
+import type { CaptureFeedbackDeps } from "./capture-feedback.js";
+import type { BriefFeedbackRow } from "./feedback.js";
 
 // ---------------------------------------------------------------------------
 // Minimal ctx surface
@@ -186,6 +189,37 @@ export function makeKillCriterionDeps(ctx: WorkerCtx): KillCriterionDeps {
         ((await ctx.state.get(key)) as Record<string, KillCriterionMetric> | null) ?? {};
       map[metric.briefDate] = metric;
       await ctx.state.set(key, map);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Capture-feedback deps (T-3.9)
+// ---------------------------------------------------------------------------
+
+export function makeCaptureFeedbackDeps(ctx: WorkerCtx): CaptureFeedbackDeps {
+  const kc = makeKillCriterionDeps(ctx);
+  return {
+    async readBrief(briefDate) {
+      const v = await ctx.state.get({
+        scopeKind: "instance",
+        namespace: briefDate,
+        stateKey: BRIEF_STORE_STATE_KEY,
+      });
+      return (v as Brief | null) ?? null;
+    },
+    async writeFeedbackRow(row: BriefFeedbackRow) {
+      await ctx.state.set(
+        { scopeKind: "instance", namespace: row.briefDate, stateKey: BRIEF_FEEDBACK_STATE_KEY },
+        row,
+      );
+    },
+    async readMetric(briefDate) {
+      const all = await kc.readAllMetrics();
+      return all.find((m) => m.briefDate === briefDate) ?? null;
+    },
+    async writeMetric(metric) {
+      await kc.writeMetric(metric);
     },
   };
 }
