@@ -27,6 +27,7 @@ import {
   checkDoNotRethink,
   type RethinkConflict,
 } from "./do-not-rethink.js";
+import { synthesizeValidated } from "./briefer-output.js";
 
 /**
  * Default model for the briefer (configurable per principal). Sonnet 4.6 is
@@ -45,6 +46,12 @@ export interface RunBrieferOptions {
   now?: Date;
   /** Set to true to skip the LLM call entirely (offline brief). */
   skipModel?: boolean;
+  /**
+   * Called when the model returns schema-invalid output twice (T-3.2). The
+   * caller (scheduled-brief) emits `briefer.schema_violation`. The narrative
+   * slot degrades to the deterministic offline summary; the brief still renders.
+   */
+  onSchemaViolation?: (error: string) => void;
 }
 
 export async function runBriefer(
@@ -84,7 +91,7 @@ export async function runBriefer(
   const sourceNotes = projects.flatMap((p) =>
     p.card.sourceRefs.map((r) => ({ projectId: p.projectId, path: r.path })),
   );
-  const warnings = projects.flatMap((p) => p.card.warnings);
+  const warnings = [...projects.flatMap((p) => p.card.warnings)];
 
   // Recommended focus — pick the first active project with a non-null
   // nextSmallestAction. Heuristic only; T-3.4 will replace with job-mix-
@@ -114,10 +121,21 @@ export async function runBriefer(
       })),
     }));
 
-  // Narrative slots — try the model; fall back to a deterministic synthesis.
-  const portfolioSummary = options.skipModel
-    ? offlinePortfolioSummary(projects)
-    : await synthesizePortfolioSummary(deps, projects, modelId);
+  // Narrative slots — try the model (structured + validated, T-3.2); fall back
+  // to a deterministic synthesis on offline / persistent schema violation.
+  let portfolioSummary: Brief["portfolioSummary"];
+  if (options.skipModel) {
+    portfolioSummary = offlinePortfolioSummary(projects);
+  } else {
+    const syn = await synthesizePortfolioSummary(deps, projects, modelId);
+    portfolioSummary = syn.summary;
+    if (syn.schemaViolation) {
+      warnings.push(
+        `briefer narrative degraded to offline — model returned invalid output (${syn.lastError ?? "schema violation"})`,
+      );
+      options.onSchemaViolation?.(syn.lastError ?? "schema violation");
+    }
+  }
 
   const changesSinceLast: Brief["changesSinceLast"] = {
     answer: (await deps.readEpisodicSinceLastBrief?.()) ?? null,
@@ -274,35 +292,55 @@ function offlinePortfolioSummary(
   };
 }
 
+interface SynthesisOutcome {
+  summary: Brief["portfolioSummary"];
+  schemaViolation: boolean;
+  lastError: string | null;
+}
+
 async function synthesizePortfolioSummary(
   deps: BrieferDeps,
   projects: readonly BrieferProjectInput[],
   modelId: string,
-): Promise<Brief["portfolioSummary"]> {
+): Promise<SynthesisOutcome> {
   if (projects.length === 0) {
-    return { answer: "No active projects.", confidence: "high", sourceRefs: [] };
+    return {
+      summary: { answer: "No active projects.", confidence: "high", sourceRefs: [] },
+      schemaViolation: false,
+      lastError: null,
+    };
   }
-  const prompt = buildPortfolioSynthesisPrompt(projects);
-  let response: { text: string | null; sessionId: string | null };
-  try {
-    response = await deps.callModel({ modelId, prompt });
-  } catch {
-    return offlinePortfolioSummary(projects);
+
+  const dataPrompt = buildPortfolioSynthesisPrompt(projects);
+  const result = await synthesizeValidated(deps, { modelId, dataPrompt });
+
+  if (result.output) {
+    // Map the validated numeric confidence onto the narrative enum. The briefer
+    // is L1 — narrative carries no sourceRefs (recommendations do, deterministically).
+    return {
+      summary: {
+        answer: result.output.summary,
+        confidence: result.output.confidence >= 0.7 ? "high" : "low",
+        sourceRefs: [],
+      },
+      schemaViolation: false,
+      lastError: null,
+    };
   }
-  if (!response.text) {
-    return offlinePortfolioSummary(projects);
-  }
+
+  // Offline or persistent schema violation → deterministic fallback.
   return {
-    answer: response.text,
-    confidence: "low", // Briefer narrative is always L1 draft.
-    sourceRefs: [],
+    summary: offlinePortfolioSummary(projects),
+    schemaViolation: result.schemaViolation,
+    lastError: result.lastError,
   };
 }
 
 function buildPortfolioSynthesisPrompt(projects: readonly BrieferProjectInput[]): string {
+  // The role + rules + output format live in the system prompt (T-3.2). This is
+  // the data payload only.
   const lines: string[] = [
-    "You are the briefer. Produce a 2-3 sentence portfolio summary based on the active projects below.",
-    "Be concrete. Cite project names. Do not invent state that isn't shown.",
+    "Project context for today's portfolio synthesis:",
     "",
   ];
   for (const p of projects) {

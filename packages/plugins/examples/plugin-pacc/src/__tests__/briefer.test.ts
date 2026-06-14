@@ -324,11 +324,28 @@ describe("runBriefer — happy path", () => {
 // ---------------------------------------------------------------------------
 
 describe("runBriefer — model handling", () => {
-  it("uses the synthesized model response when available", async () => {
+  it("uses the synthesized model response when available (T-3.2 structured JSON)", async () => {
     state.projects = [projectInput("p-1")];
-    state.modelResponses = ["a sharp two-sentence portfolio summary"];
+    state.modelResponses = [
+      JSON.stringify({
+        summary: "a sharp two-sentence portfolio summary",
+        confidence: 0.8,
+        observedFacts: [],
+        inferredConclusions: [],
+        warnings: [],
+      }),
+    ];
     const brief = await runBriefer(makeDeps(state), { now: NOW });
     expect(brief.portfolioSummary.answer).toBe("a sharp two-sentence portfolio summary");
+    expect(brief.portfolioSummary.confidence).toBe("high"); // 0.8 >= 0.7
+  });
+
+  it("degrades to offline + warns when the model returns non-JSON twice (T-3.2)", async () => {
+    state.projects = [projectInput("p-1")];
+    state.modelResponses = ["not json", "still not json"];
+    const brief = await runBriefer(makeDeps(state), { now: NOW });
+    expect(brief.portfolioSummary.answer).toContain("offline mode");
+    expect(brief.warnings.some((w) => w.includes("narrative degraded to offline"))).toBe(true);
   });
 
   it("falls back to offline summary when the model throws", async () => {

@@ -54,6 +54,8 @@ export const BRIEF_GENERATED_EVENT = "steward.brief.generated";
 export const HALLUCINATION_FLAG_EVENT = "agent.hallucination_flag";
 /** Event emitted when the briefer self-pauses (T-3.7). */
 export const SELF_PAUSED_EVENT = "agent.self_paused";
+/** Event emitted when the model returns schema-invalid output twice (T-3.2). */
+export const SCHEMA_VIOLATION_EVENT = "briefer.schema_violation";
 
 /**
  * Optional hallucination-tripwire wiring (T-3.7). When provided, the
@@ -220,11 +222,27 @@ export async function runScheduledBrief(
   }
 
   try {
-    // 2. Produce structured Brief.
+    // 2. Produce structured Brief. Capture any T-3.2 schema violation so we can
+    //    emit `briefer.schema_violation` after the brief is built.
+    let schemaViolationError: string | null = null;
     const brief = await runBriefer(deps.briefer, {
       ...options.brieferOptions,
       now,
+      onSchemaViolation: (err) => {
+        schemaViolationError = err;
+      },
     });
+    if (schemaViolationError !== null) {
+      await deps.emitEvent(SCHEMA_VIOLATION_EVENT, {
+        briefDate: brief.briefDate,
+        error: schemaViolationError,
+        runId: options.runId ?? null,
+      });
+      deps.logger.warn("scheduled brief: model schema violation; narrative degraded to offline", {
+        runId: options.runId,
+        error: schemaViolationError,
+      });
+    }
 
     // 2b. Kill-criterion metric (T-3.10): persist a metric for this brief and
     //     gather history so the self-check section renders real totals.
