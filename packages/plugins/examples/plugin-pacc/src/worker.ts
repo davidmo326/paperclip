@@ -24,8 +24,35 @@ import {
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
 import { runScheduledBrief } from "./lib/briefer/scheduled-brief.js";
-import { makeScheduledBriefDeps, makeCaptureFeedbackDeps } from "./lib/briefer/worker-deps.js";
+import {
+  makeScheduledBriefDeps,
+  makeCaptureFeedbackDeps,
+  assembleProjectCards,
+} from "./lib/briefer/worker-deps.js";
 import { captureBriefFeedback } from "./lib/briefer/capture-feedback.js";
+import { writeObsidianBrief } from "./lib/briefer/obsidian-writer.js";
+import { computeJobMix, type JobMixProjectInput, type JobMixPhase } from "./lib/briefer/job-mix.js";
+import {
+  buildWeeklyReview,
+  renderWeeklyReviewMarkdown,
+  isoWeekLabel,
+  type WeeklyProjectInput,
+} from "./lib/briefer/weekly-review.js";
+import {
+  buildWeekendPrep,
+  renderWeekendPrepMarkdown,
+  type WeekendProjectInput,
+} from "./lib/briefer/weekend-prep.js";
+
+/**
+ * Obsidian daily directory — where briefs, weekly reviews, and weekend prep
+ * land. Mirrors the default in scheduled-brief.ts.
+ */
+function obsidianDailyDir(): string {
+  return process.env.HOME
+    ? `${process.env.HOME}/llm_shared/Obsidian/00_Daily`
+    : "./Obsidian/00_Daily";
+}
 
 // ---------------------------------------------------------------------------
 // Stale threshold constants (mirrors control-plane.service.ts)
@@ -416,6 +443,78 @@ const plugin: PaperclipPlugin = definePlugin({
         ctx.logger.info("daily-brief job complete", {
           runId: job.runId,
           kind: result.kind,
+        });
+      },
+    );
+
+    // T-3.11: Weekly portfolio review (Mon 09:00).
+    ctx.jobs.register(
+      JOB_KEYS.weeklyReview,
+      async (job: PluginJobContext): Promise<void> => {
+        const now = new Date();
+        const cards = await assembleProjectCards(ctx);
+        const jobMixInputs: JobMixProjectInput[] = cards.map((c) => ({
+          projectId: c.projectId,
+          projectName: c.projectName,
+          phase: (c.card.currentPhase as JobMixPhase | null) ?? null,
+          jobClassificationDominant:
+            (c.card as { jobClassificationDominant?: JobMixProjectInput["jobClassificationDominant"] })
+              .jobClassificationDominant ?? null,
+        }));
+        const jobMix = computeJobMix(jobMixInputs, [], { now });
+        const weeklyProjects: WeeklyProjectInput[] = cards.map((c) => ({
+          projectId: c.projectId,
+          projectName: c.projectName,
+          portfolioState: c.card.portfolioState ?? null,
+          phase: c.card.currentPhase ?? null,
+          staleStatus: c.card.staleStatus ?? null,
+          nextAction: c.card.nextActions.answer,
+          assumptionsDue: c.card.activeAssumptions
+            .filter((a) => a.status === "stale" || a.status === "challenged")
+            .map((a) => ({ statement: a.statement })),
+          driftCount: c.card.staleMarkers.length,
+        }));
+        const review = buildWeeklyReview({ projects: weeklyProjects, jobMix, now });
+        const markdown = renderWeeklyReviewMarkdown(review);
+        const write = await writeObsidianBrief(markdown, {
+          baseDir: obsidianDailyDir(),
+          briefDate: review.weekLabel,
+          filenamePrefix: "Weekly Portfolio Review - ",
+        });
+        ctx.logger.info("weekly-review job complete", {
+          runId: job.runId,
+          week: isoWeekLabel(now),
+          path: write.path,
+          kind: write.kind,
+        });
+      },
+    );
+
+    // T-3.11: Weekend prep (Fri 16:00).
+    ctx.jobs.register(
+      JOB_KEYS.weekendPrep,
+      async (job: PluginJobContext): Promise<void> => {
+        const now = new Date();
+        const cards = await assembleProjectCards(ctx);
+        const weekendProjects: WeekendProjectInput[] = cards.map((c) => ({
+          projectId: c.projectId,
+          projectName: c.projectName,
+          portfolioState: c.card.portfolioState ?? null,
+          blockerSummary: c.card.blockers.answer,
+          preAuthorizedAsyncWork: [],
+        }));
+        const prep = buildWeekendPrep({ projects: weekendProjects, now });
+        const markdown = renderWeekendPrepMarkdown(prep);
+        const write = await writeObsidianBrief(markdown, {
+          baseDir: obsidianDailyDir(),
+          briefDate: prep.date,
+          filenamePrefix: "Weekend Prep - ",
+        });
+        ctx.logger.info("weekend-prep job complete", {
+          runId: job.runId,
+          date: prep.date,
+          path: write.path,
+          kind: write.kind,
         });
       },
     );

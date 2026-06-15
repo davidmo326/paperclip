@@ -67,6 +67,20 @@ const manifest: PaperclipPluginManifestV1 = {
         "T-3.6 / PRD § 13.1: produces the day's operating brief and writes it to Obsidian (00_Daily/Daily Brief - YYYY-MM-DD.md). Overlap-guarded via plugin_state advisory lock; idempotent Obsidian write so re-runs on the same day produce no diff.",
       schedule: "0 8 * * *", // 08:00 local daily
     },
+    {
+      jobKey: JOB_KEYS.weeklyReview,
+      displayName: "Weekly Portfolio Review",
+      description:
+        "T-3.11 / PRD § 13.2: Monday review — portfolio roll-call, weekly J-mix, FPCP ritual prompts, assumptions/decisions due, memory drift, expiring grants, stale + no-next-action projects. Writes 00_Daily/Weekly Portfolio Review - YYYY-Www.md (idempotent).",
+      schedule: "0 9 * * 1", // Mondays 09:00 local
+    },
+    {
+      jobKey: JOB_KEYS.weekendPrep,
+      displayName: "Weekend Prep",
+      description:
+        "T-3.11 / PRD § 13.4: Friday prep — pre-authorized async work, self-pause boundaries, must-land-before-Monday. Writes 00_Daily/Weekend Prep - YYYY-MM-DD.md (idempotent).",
+      schedule: "0 16 * * 5", // Fridays 16:00 local
+    },
   ],
   ui: {
     slots: [

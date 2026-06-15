@@ -57,4 +57,8 @@ export const JOB_KEYS = {
   sourceDecayCheck: "source-decay-check",
   /** T-3.6 — daily operating brief at 08:00 local. */
   briefDaily: "brief-daily",
+  /** T-3.11 — weekly portfolio review (Mon 09:00). */
+  weeklyReview: "weekly-review",
+  /** T-3.11 — weekend prep (Fri 16:00). */
+  weekendPrep: "weekend-prep",
 } as const;
