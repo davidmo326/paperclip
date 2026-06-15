@@ -5,12 +5,15 @@ import { describe, expect, it } from "vitest";
 import {
   makeDecisionRecord,
   applySupersede,
+  applyOutcome,
+  selectDecisionsDue,
   walkSupersedeChain,
   type DecisionInput,
   type DecisionRecord,
 } from "../lib/decisions/decision-log.js";
 import {
   recordDecision,
+  reviewDecision,
   getDecisionHistory,
   type CaptureDecisionDeps,
 } from "../lib/decisions/capture-decision.js";
@@ -157,5 +160,63 @@ describe("recordDecision", () => {
     const b = await recordDecision(deps, input({ supersedes: a.decision.id }), { now: NOW, actor: "principal" });
     const history = await getDecisionHistory(deps, a.decision.id);
     expect(history.map((d) => d.id)).toEqual([a.decision.id, b.decision.id]);
+  });
+});
+
+describe("applyOutcome (T-4.7)", () => {
+  const base = () => makeDecisionRecord(input(), { id: "d1", now: NOW, actor: "principal" });
+
+  it("fills outcome + reviewedAt", () => {
+    const r = applyOutcome(base(), "good", NOW);
+    expect(r.outcome).toEqual({ reviewedAt: NOW.toISOString(), outcome: "good" });
+  });
+
+  it("rejects an unknown outcome label", () => {
+    expect(() => applyOutcome(base(), "great" as never, NOW)).toThrow();
+  });
+
+  it("refuses to overwrite an existing outcome unless force", () => {
+    const once = applyOutcome(base(), "good", NOW);
+    expect(() => applyOutcome(once, "bad", NOW)).toThrowError(/already has outcome/);
+    expect(applyOutcome(once, "bad", NOW, { force: true }).outcome?.outcome).toBe("bad");
+  });
+});
+
+describe("selectDecisionsDue (T-4.7)", () => {
+  function rec(over: Partial<DecisionRecord>): DecisionRecord {
+    return { ...makeDecisionRecord(input(), { id: "x", now: NOW, actor: "principal" }), ...over };
+  }
+  const NOW2 = new Date("2026-06-15T00:00:00.000Z");
+
+  it("returns active, outcome-null decisions past their reviewDate", () => {
+    const due = rec({ id: "due", reviewDate: "2026-06-01T00:00:00.000Z" });
+    const future = rec({ id: "future", reviewDate: "2026-12-01T00:00:00.000Z" });
+    const noDate = rec({ id: "nodate", reviewDate: null });
+    const reviewed = rec({ id: "done", reviewDate: "2026-06-01T00:00:00.000Z", outcome: { reviewedAt: "x", outcome: "good" } });
+    const superseded = rec({ id: "old", reviewDate: "2026-06-01T00:00:00.000Z", status: "superseded", supersededBy: "z" });
+
+    const out = selectDecisionsDue([due, future, noDate, reviewed, superseded], NOW2).map((d) => d.id);
+    expect(out).toEqual(["due"]);
+  });
+});
+
+describe("reviewDecision (T-4.7)", () => {
+  it("round-trips: writes outcome, refuses silent overwrite", async () => {
+    const deps = new InMemoryDecisions();
+    const d = await recordDecision(deps, input(), { now: NOW, actor: "principal" });
+    const reviewed = await reviewDecision(deps, d.decision.id, "good", { now: NOW });
+    expect(reviewed.outcome?.outcome).toBe("good");
+    // persisted
+    expect((await deps.getDecision(d.decision.id))?.outcome?.outcome).toBe("good");
+    // no silent overwrite
+    await expect(reviewDecision(deps, d.decision.id, "bad", { now: NOW })).rejects.toThrow();
+    // force overwrites
+    const forced = await reviewDecision(deps, d.decision.id, "bad", { now: NOW, force: true });
+    expect(forced.outcome?.outcome).toBe("bad");
+  });
+
+  it("errors for a non-existent decision", async () => {
+    const deps = new InMemoryDecisions();
+    await expect(reviewDecision(deps, "ghost", "good", { now: NOW })).rejects.toThrowError(/no such decision/);
   });
 });

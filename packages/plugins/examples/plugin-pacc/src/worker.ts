@@ -31,8 +31,8 @@ import {
 } from "./lib/briefer/worker-deps.js";
 import { captureBriefFeedback } from "./lib/briefer/capture-feedback.js";
 import { makeDecisionDeps } from "./lib/decisions/decision-deps.js";
-import { recordDecision, getDecisionHistory } from "./lib/decisions/capture-decision.js";
-import type { DecisionInput } from "./lib/decisions/decision-log.js";
+import { recordDecision, getDecisionHistory, reviewDecision } from "./lib/decisions/capture-decision.js";
+import { selectDecisionsDue, type DecisionInput, type OutcomeLabel } from "./lib/decisions/decision-log.js";
 import { writeObsidianBrief } from "./lib/briefer/obsidian-writer.js";
 import { computeJobMix, type JobMixProjectInput, type JobMixPhase } from "./lib/briefer/job-mix.js";
 import {
@@ -465,6 +465,20 @@ const plugin: PaperclipPlugin = definePlugin({
               .jobClassificationDominant ?? null,
         }));
         const jobMix = computeJobMix(jobMixInputs, [], { now });
+        // T-4.7: decisions past their reviewDate with no outcome yet.
+        const decisionDeps = makeDecisionDeps(ctx);
+        const projectNameById = new Map(cards.map((c) => [c.projectId, c.projectName]));
+        const decisionsDue: Array<{ projectName: string; summary: string; reviewDate: string | null }> = [];
+        for (const c of cards) {
+          const due = selectDecisionsDue(await decisionDeps.listProjectDecisions(c.projectId), now);
+          for (const d of due) {
+            decisionsDue.push({
+              projectName: projectNameById.get(d.projectId) ?? d.projectId,
+              summary: d.summary,
+              reviewDate: d.reviewDate,
+            });
+          }
+        }
         const weeklyProjects: WeeklyProjectInput[] = cards.map((c) => ({
           projectId: c.projectId,
           projectName: c.projectName,
@@ -477,7 +491,7 @@ const plugin: PaperclipPlugin = definePlugin({
             .map((a) => ({ statement: a.statement })),
           driftCount: c.card.staleMarkers.length,
         }));
-        const review = buildWeeklyReview({ projects: weeklyProjects, jobMix, now });
+        const review = buildWeeklyReview({ projects: weeklyProjects, jobMix, decisionsDue, now });
         const markdown = renderWeeklyReviewMarkdown(review);
         const write = await writeObsidianBrief(markdown, {
           baseDir: obsidianDailyDir(),
@@ -640,6 +654,16 @@ const plugin: PaperclipPlugin = definePlugin({
       const actor = str("actor") || "principal";
       const result = await recordDecision(makeDecisionDeps(ctx), input, { now: new Date(), actor });
       return result;
+    });
+
+    // T-4.7: record the principal's retrospective outcome on a decision (L5).
+    ctx.actions.register("review-decision", async (params) => {
+      const id = typeof params.id === "string" ? params.id : "";
+      const outcome = typeof params.outcome === "string" ? (params.outcome as OutcomeLabel) : ("" as OutcomeLabel);
+      if (!id || !outcome) throw new Error("id and outcome are required");
+      const force = params.force === true;
+      const updated = await reviewDecision(makeDecisionDeps(ctx), id, outcome, { now: new Date(), force });
+      return updated;
     });
 
     // T-4.4: read the supersession chain for a decision id.

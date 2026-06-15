@@ -8,10 +8,12 @@
 import {
   makeDecisionRecord,
   applySupersede,
+  applyOutcome,
   walkSupersedeChain,
   DecisionValidationError,
   type DecisionInput,
   type DecisionRecord,
+  type OutcomeLabel,
 } from "./decision-log.js";
 
 export interface CaptureDecisionDeps {
@@ -64,6 +66,26 @@ export async function recordDecision(
   }
 
   return { decision, supersededPrior };
+}
+
+/**
+ * Record the principal's retrospective outcome on a decision (T-4.7). L5 —
+ * never auto-filled by an agent. Refuses to overwrite an existing outcome
+ * unless `force`.
+ */
+export async function reviewDecision(
+  deps: CaptureDecisionDeps,
+  id: string,
+  outcome: OutcomeLabel,
+  opts: { now: Date; force?: boolean },
+): Promise<DecisionRecord> {
+  const decision = await deps.getDecision(id);
+  if (!decision) {
+    throw new DecisionValidationError("MISSING_FIELD", `no such decision: ${id}`);
+  }
+  const updated = applyOutcome(decision, outcome, opts.now, { force: opts.force });
+  await deps.putDecision(updated);
+  return updated;
 }
 
 /** Return the full supersession chain (oldest → newest) for a decision id. */

@@ -132,6 +132,20 @@ describe("renderWeeklyReviewMarkdown", () => {
     expect(renderWeeklyReviewMarkdown(review())).toBe(renderWeeklyReviewMarkdown(review()));
   });
 
+  it("renders decisions due for review (T-4.7) with the review hint", () => {
+    const md = renderWeeklyReviewMarkdown(
+      buildWeeklyReview({
+        now: NOW,
+        jobMix: [],
+        projects: [proj({ projectName: "Alpha" })],
+        decisionsDue: [{ projectName: "Alpha", summary: "Use embedded Postgres", reviewDate: "2026-06-01" }],
+      }),
+    );
+    expect(md).toContain("Use embedded Postgres");
+    expect(md).toContain("pacc decide --review");
+    expect(md).toContain("review date 2026-06-01");
+  });
+
   it("ends with exactly one trailing newline", () => {
     const md = renderWeeklyReviewMarkdown(review());
     expect(md.endsWith("\n")).toBe(true);

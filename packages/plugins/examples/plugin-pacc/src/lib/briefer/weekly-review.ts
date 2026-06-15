@@ -32,6 +32,8 @@ export interface WeeklyProjectInput {
 export interface WeeklyReviewInput {
   projects: readonly WeeklyProjectInput[];
   jobMix: readonly JobMixRow[];
+  /** Decisions past their reviewDate with no outcome yet (T-4.7). */
+  decisionsDue?: ReadonlyArray<{ projectName: string; summary: string; reviewDate: string | null }>;
   now: Date;
 }
 
@@ -41,6 +43,7 @@ export interface WeeklyReview {
   rollup: Array<{ state: string; projects: string[] }>;
   jobMix: JobMixRow[];
   assumptionsDue: Array<{ projectName: string; statement: string }>;
+  decisionsDue: Array<{ projectName: string; summary: string; reviewDate: string | null }>;
   driftPending: Array<{ projectName: string; count: number }>;
   staleProjects: string[];
   noNextActionProjects: string[];
@@ -80,12 +83,17 @@ export function buildWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     .map((p) => p.projectName)
     .sort();
 
+  const decisionsDue = [...(input.decisionsDue ?? [])].sort((a, b) =>
+    a.projectName + a.summary < b.projectName + b.summary ? -1 : 1,
+  );
+
   return {
     weekLabel: isoWeekLabel(input.now),
     generatedAt: input.now.toISOString(),
     rollup,
     jobMix: [...input.jobMix],
     assumptionsDue,
+    decisionsDue,
     driftPending,
     staleProjects,
     noNextActionProjects,
@@ -141,7 +149,16 @@ export function renderWeeklyReviewMarkdown(review: WeeklyReview): string {
 
   out.push("## Decisions Due for Review");
   out.push("");
-  out.push(`- ${NOT_WIRED} — backfilled by T-4.7 (decision-outcome backfill).`);
+  if (review.decisionsDue.length === 0) {
+    out.push("- _none due_");
+  } else {
+    for (const d of review.decisionsDue) {
+      const due = d.reviewDate ? ` _(review date ${d.reviewDate})_` : "";
+      out.push(`- **${d.projectName}**: ${d.summary}${due}`);
+    }
+    out.push("");
+    out.push("_Record an outcome with_ `pacc decide --review <id> --outcome <good|mixed|bad|too-early>`.");
+  }
   out.push("");
 
   out.push("## Memory Drift");

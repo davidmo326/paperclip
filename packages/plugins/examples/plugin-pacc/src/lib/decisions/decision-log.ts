@@ -152,6 +152,53 @@ export function applySupersede(
   return { ...prior, supersededBy: newId, status: "superseded", updatedAt: now.toISOString() };
 }
 
+export type OutcomeLabel = "good" | "mixed" | "bad" | "too-early";
+
+const VALID_OUTCOMES = new Set<OutcomeLabel>(["good", "mixed", "bad", "too-early"]);
+
+/**
+ * Fill a decision's `outcome` retrospectively (T-4.7, PRD § 8.5). This is L5 —
+ * only the principal judges an outcome; agents may never write it. By default a
+ * decision that already has an outcome is NOT silently overwritten (pass
+ * `force` to replace it).
+ */
+export function applyOutcome(
+  decision: DecisionRecord,
+  outcome: OutcomeLabel,
+  now: Date,
+  opts: { force?: boolean } = {},
+): DecisionRecord {
+  if (!VALID_OUTCOMES.has(outcome)) {
+    throw new DecisionValidationError("MISSING_FIELD", `outcome must be one of ${[...VALID_OUTCOMES].join("/")}`);
+  }
+  if (decision.outcome !== null && !opts.force) {
+    throw new DecisionValidationError(
+      "MISSING_FIELD",
+      `decision ${decision.id} already has outcome "${decision.outcome.outcome}" (reviewed ${decision.outcome.reviewedAt}); pass force to overwrite`,
+    );
+  }
+  const iso = now.toISOString();
+  return { ...decision, outcome: { reviewedAt: iso, outcome }, updatedAt: iso };
+}
+
+/**
+ * Decisions due for review at `now`: active decisions whose `reviewDate` has
+ * passed and whose `outcome` is still unfilled. (Superseded decisions are
+ * excluded — their successor carries the live review obligation.)
+ */
+export function selectDecisionsDue(records: readonly DecisionRecord[], now: Date): DecisionRecord[] {
+  const t = now.getTime();
+  return records
+    .filter(
+      (d) =>
+        d.status === "active" &&
+        d.outcome === null &&
+        d.reviewDate !== null &&
+        new Date(d.reviewDate).getTime() < t,
+    )
+    .sort((a, b) => (String(a.reviewDate) < String(b.reviewDate) ? -1 : 1));
+}
+
 /**
  * Walk the supersession chain that `startId` belongs to, returning records
  * oldest → newest. Tolerates being given any id in the chain.
