@@ -30,6 +30,9 @@ import {
   assembleProjectCards,
 } from "./lib/briefer/worker-deps.js";
 import { captureBriefFeedback } from "./lib/briefer/capture-feedback.js";
+import { makeDecisionDeps } from "./lib/decisions/decision-deps.js";
+import { recordDecision, getDecisionHistory } from "./lib/decisions/capture-decision.js";
+import type { DecisionInput } from "./lib/decisions/decision-log.js";
 import { writeObsidianBrief } from "./lib/briefer/obsidian-writer.js";
 import { computeJobMix, type JobMixProjectInput, type JobMixPhase } from "./lib/briefer/job-mix.js";
 import {
@@ -605,6 +608,52 @@ const plugin: PaperclipPlugin = definePlugin({
         markdown,
       });
       return result;
+    });
+
+    // T-4.4: record a decision (append-only; supersede marks the prior).
+    ctx.actions.register("record-decision", async (params) => {
+      const str = (k: string): string => (typeof params[k] === "string" ? (params[k] as string) : "");
+      const projectId = str("projectId");
+      const summary = str("summary");
+      const chosenOption = str("chosenOption");
+      const rationale = str("rationale");
+      if (!projectId || !summary || !chosenOption || !rationale) {
+        throw new Error("projectId, summary, chosenOption, and rationale are required");
+      }
+      const input: DecisionInput = {
+        projectId,
+        summary,
+        chosenOption,
+        rationale,
+        optionsConsidered: Array.isArray(params.optionsConsidered)
+          ? (params.optionsConsidered as DecisionInput["optionsConsidered"])
+          : [],
+        sourceRefs: Array.isArray(params.sourceRefs)
+          ? (params.sourceRefs as DecisionInput["sourceRefs"])
+          : [],
+        decidedBy: str("decidedBy") || "principal",
+        jobClassification: (str("jobClassification") || "meta") as DecisionInput["jobClassification"],
+        supersedes: typeof params.supersede === "string" ? (params.supersede as string) : null,
+        reviewDate: typeof params.reviewDate === "string" ? (params.reviewDate as string) : null,
+        reversibleUntil: typeof params.reversibleUntil === "string" ? (params.reversibleUntil as string) : null,
+      };
+      const actor = str("actor") || "principal";
+      const result = await recordDecision(makeDecisionDeps(ctx), input, { now: new Date(), actor });
+      return result;
+    });
+
+    // T-4.4: read the supersession chain for a decision id.
+    ctx.data.register("decision-history", async (params) => {
+      const id = typeof params.id === "string" ? params.id : "";
+      if (!id) return [];
+      return await getDecisionHistory(makeDecisionDeps(ctx), id);
+    });
+
+    // T-4.4: list a project's decisions (used by weekly review's "decisions due").
+    ctx.data.register("list-decisions", async (params) => {
+      const projectId = typeof params.projectId === "string" ? params.projectId : "";
+      if (!projectId) return [];
+      return await makeDecisionDeps(ctx).listProjectDecisions(projectId);
     });
 
     ctx.logger.info("pacc plugin setup complete");
