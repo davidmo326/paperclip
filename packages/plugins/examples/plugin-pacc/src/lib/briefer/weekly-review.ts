@@ -34,6 +34,8 @@ export interface WeeklyReviewInput {
   jobMix: readonly JobMixRow[];
   /** Decisions past their reviewDate with no outcome yet (T-4.7). */
   decisionsDue?: ReadonlyArray<{ projectName: string; summary: string; reviewDate: string | null }>;
+  /** Authority grants expiring within the week (T-4.6). */
+  expiringGrants?: ReadonlyArray<{ label: string; expiresAt: string }>;
   now: Date;
 }
 
@@ -44,6 +46,7 @@ export interface WeeklyReview {
   jobMix: JobMixRow[];
   assumptionsDue: Array<{ projectName: string; statement: string }>;
   decisionsDue: Array<{ projectName: string; summary: string; reviewDate: string | null }>;
+  expiringGrants: Array<{ label: string; expiresAt: string }>;
   driftPending: Array<{ projectName: string; count: number }>;
   staleProjects: string[];
   noNextActionProjects: string[];
@@ -87,6 +90,8 @@ export function buildWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     a.projectName + a.summary < b.projectName + b.summary ? -1 : 1,
   );
 
+  const expiringGrants = [...(input.expiringGrants ?? [])].sort((a, b) => (a.expiresAt < b.expiresAt ? -1 : 1));
+
   return {
     weekLabel: isoWeekLabel(input.now),
     generatedAt: input.now.toISOString(),
@@ -94,6 +99,7 @@ export function buildWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     jobMix: [...input.jobMix],
     assumptionsDue,
     decisionsDue,
+    expiringGrants,
     driftPending,
     staleProjects,
     noNextActionProjects,
@@ -172,7 +178,11 @@ export function renderWeeklyReviewMarkdown(review: WeeklyReview): string {
 
   out.push("## Authority Grants Expiring This Week");
   out.push("");
-  out.push(`- ${NOT_WIRED} — needs authority_profiles SDK read (lands with T-5.x).`);
+  if (review.expiringGrants.length === 0) {
+    out.push("- _none expiring_");
+  } else {
+    for (const g of review.expiringGrants) out.push(`- ${g.label} _(expires ${g.expiresAt})_`);
+  }
   out.push("");
 
   out.push("## Stale Projects");

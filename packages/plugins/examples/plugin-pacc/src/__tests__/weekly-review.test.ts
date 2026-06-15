@@ -146,6 +146,19 @@ describe("renderWeeklyReviewMarkdown", () => {
     expect(md).toContain("review date 2026-06-01");
   });
 
+  it("renders expiring authority grants (T-4.6)", () => {
+    const md = renderWeeklyReviewMarkdown(
+      buildWeeklyReview({
+        now: NOW,
+        jobMix: [],
+        projects: [proj({ projectName: "Alpha" })],
+        expiringGrants: [{ label: "L2 state @ circlo", expiresAt: "2026-06-18T00:00:00.000Z" }],
+      }),
+    );
+    expect(md).toContain("L2 state @ circlo");
+    expect(md).toContain("expires 2026-06-18");
+  });
+
   it("ends with exactly one trailing newline", () => {
     const md = renderWeeklyReviewMarkdown(review());
     expect(md.endsWith("\n")).toBe(true);

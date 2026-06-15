@@ -33,6 +33,15 @@ import { captureBriefFeedback } from "./lib/briefer/capture-feedback.js";
 import { makeDecisionDeps } from "./lib/decisions/decision-deps.js";
 import { recordDecision, getDecisionHistory, reviewDecision } from "./lib/decisions/capture-decision.js";
 import { selectDecisionsDue, type DecisionInput, type OutcomeLabel } from "./lib/decisions/decision-log.js";
+import { makeGrantDeps } from "./lib/authority/grant-deps.js";
+import { recordGrant, revokeGrant, listActiveGrants, evaluateAuthority } from "./lib/authority/capture-grant.js";
+import {
+  parseExpiresIn,
+  selectExpiringGrants,
+  type ActionClass,
+  type GrantInput,
+} from "./lib/authority/authority-grant.js";
+import type { AuthorityLevel } from "@paperclipai/shared";
 import { writeObsidianBrief } from "./lib/briefer/obsidian-writer.js";
 import { computeJobMix, type JobMixProjectInput, type JobMixPhase } from "./lib/briefer/job-mix.js";
 import {
@@ -491,7 +500,12 @@ const plugin: PaperclipPlugin = definePlugin({
             .map((a) => ({ statement: a.statement })),
           driftCount: c.card.staleMarkers.length,
         }));
-        const review = buildWeeklyReview({ projects: weeklyProjects, jobMix, decisionsDue, now });
+        // T-4.6: authority grants expiring within the week.
+        const expiringGrants = selectExpiringGrants(await makeGrantDeps(ctx).listGrants(), now, 7).map((g) => ({
+          label: `${g.ceiling} ${g.actionClass} @ ${g.projectId ?? "portfolio"}`,
+          expiresAt: g.expiresAt,
+        }));
+        const review = buildWeeklyReview({ projects: weeklyProjects, jobMix, decisionsDue, expiringGrants, now });
         const markdown = renderWeeklyReviewMarkdown(review);
         const write = await writeObsidianBrief(markdown, {
           baseDir: obsidianDailyDir(),
@@ -678,6 +692,55 @@ const plugin: PaperclipPlugin = definePlugin({
       const projectId = typeof params.projectId === "string" ? params.projectId : "";
       if (!projectId) return [];
       return await makeDecisionDeps(ctx).listProjectDecisions(projectId);
+    });
+
+    // T-4.6: grant authority (principal only; explicit expiry).
+    ctx.actions.register("record-grant", async (params) => {
+      const str = (k: string): string => (typeof params[k] === "string" ? (params[k] as string) : "");
+      const actionClass = str("actionClass") as ActionClass;
+      const ceiling = str("ceiling") as AuthorityLevel;
+      if (!actionClass || !ceiling) throw new Error("actionClass and ceiling are required");
+      const now = new Date();
+      const expiresAt = str("expiresAt") || parseExpiresIn(str("expiresIn") || "30d", now);
+      const input: GrantInput = {
+        projectId: str("projectId") || null,
+        agentId: str("agentId") || null,
+        actionClass,
+        ceiling,
+        expiresAt,
+        notes: str("notes") || null,
+      };
+      const grantedBy = str("grantedBy") || "principal";
+      return await recordGrant(makeGrantDeps(ctx), input, { now, grantedBy });
+    });
+
+    // T-4.6: revoke a grant (never deletes).
+    ctx.actions.register("revoke-grant", async (params) => {
+      const id = typeof params.id === "string" ? params.id : "";
+      if (!id) throw new Error("id is required");
+      return await revokeGrant(makeGrantDeps(ctx), id, new Date());
+    });
+
+    // T-4.6: list active grants.
+    ctx.data.register("list-grants", async () => {
+      return await listActiveGrants(makeGrantDeps(ctx), new Date());
+    });
+
+    // T-4.6/T-5.1: authority enforcement check.
+    ctx.data.register("check-authority", async (params) => {
+      const projectId = typeof params.projectId === "string" ? params.projectId : "";
+      const actionClass = typeof params.actionClass === "string" ? (params.actionClass as ActionClass) : ("" as ActionClass);
+      const level = typeof params.level === "string" ? (params.level as AuthorityLevel) : ("" as AuthorityLevel);
+      if (!projectId || !actionClass || !level) return { allowed: false };
+      const agentId = typeof params.agentId === "string" ? (params.agentId as string) : null;
+      const allowed = await evaluateAuthority(makeGrantDeps(ctx), {
+        projectId,
+        actionClass,
+        level,
+        agentId,
+        now: new Date(),
+      });
+      return { allowed };
     });
 
     ctx.logger.info("pacc plugin setup complete");
