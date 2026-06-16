@@ -638,6 +638,28 @@ const plugin: PaperclipPlugin = definePlugin({
       return result;
     });
 
+    // T-3.8 follow-up: generate a brief on demand (for the M-Brief trial). An
+    // optional `date` (YYYY-MM-DD) overrides "now" so several distinct-date
+    // briefs can be produced in one sitting. Reuses the exact cron path.
+    ctx.actions.register("run-brief", async (params) => {
+      const dateStr = typeof params.date === "string" ? params.date : "";
+      const now = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? new Date(`${dateStr}T08:00:00.000Z`) : new Date();
+      const { deps, model } = await makeScheduledBriefDeps(ctx);
+      const result = await runScheduledBrief(deps, {
+        now,
+        brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+      });
+      return {
+        kind: result.kind,
+        modelEnabled: model.enabled,
+        modelId: model.modelId,
+        briefDate: result.kind === "completed" ? result.brief.briefDate : now.toISOString().slice(0, 10),
+        path: result.kind === "completed" || result.kind === "skipped_paused" ? result.obsidianWrite.path : null,
+        hallucinationFlagCount: result.kind === "completed" ? result.hallucinationFlagCount : 0,
+        selfPaused: result.kind === "completed" ? result.selfPaused : result.kind === "skipped_paused",
+      };
+    });
+
     // T-4.4: record a decision (append-only; supersede marks the prior).
     ctx.actions.register("record-decision", async (params) => {
       const str = (k: string): string => (typeof params[k] === "string" ? (params[k] as string) : "");
