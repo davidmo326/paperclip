@@ -58,12 +58,15 @@ import {
 
 /**
  * Obsidian daily directory — where briefs, weekly reviews, and weekend prep
- * land. Mirrors the default in scheduled-brief.ts.
+ * land. Resolved at call-time (not module-load) and overridable via
+ * PACC_OBSIDIAN_DIR so it never falls back to a stray relative path when HOME
+ * is unset in the worker child.
  */
 function obsidianDailyDir(): string {
-  return process.env.HOME
-    ? `${process.env.HOME}/llm_shared/Obsidian/00_Daily`
-    : "./Obsidian/00_Daily";
+  const override = process.env.PACC_OBSIDIAN_DIR?.trim();
+  if (override) return override;
+  const home = process.env.HOME?.trim();
+  return home ? `${home}/llm_shared/Obsidian/00_Daily` : "/home/ubuntu/llm_shared/Obsidian/00_Daily";
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +453,7 @@ const plugin: PaperclipPlugin = definePlugin({
         });
         const result = await runScheduledBrief(deps, {
           runId: job.runId,
+          obsidianBaseDir: obsidianDailyDir(),
           brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
         });
         ctx.logger.info("daily-brief job complete", {
@@ -647,6 +651,7 @@ const plugin: PaperclipPlugin = definePlugin({
       const { deps, model } = await makeScheduledBriefDeps(ctx);
       const result = await runScheduledBrief(deps, {
         now,
+        obsidianBaseDir: obsidianDailyDir(),
         brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
       });
       return {
