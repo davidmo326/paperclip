@@ -156,6 +156,8 @@ export interface ContextCard {
   goal: AnswerWithCitations;
   portfolioState: ProjectPortfolioState | null;
   currentPhase: ProjectPhase | null;
+  /** Which job (J1/J2/J3/meta) the project is dominantly serving (PRD § 8.1). */
+  jobClassificationDominant: "J1_signal" | "J2_distribution" | "J3_product" | "meta" | null;
   constraintLane: ProjectConstraintLane | null;
   currentStatus: AnswerWithCitations;
   latestDecisions: DecisionSummary[];
@@ -247,6 +249,8 @@ export function buildContextCard(
     goal,
     portfolioState: state?.portfolioState ?? null,
     currentPhase: state?.currentPhase ?? null,
+    jobClassificationDominant:
+      (state?.jobClassificationDominant as ContextCard["jobClassificationDominant"]) ?? null,
     constraintLane: state?.constraintLane ?? null,
     currentStatus: status,
     latestDecisions: recentDecisions.slice(0, 10),
