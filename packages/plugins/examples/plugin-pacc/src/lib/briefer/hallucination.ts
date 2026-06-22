@@ -108,6 +108,9 @@ const DEFAULT_ALLOW_LIST = new Set<string>([
   "control-plane",
   "self-check",
   "kill-criterion",
+  // common hyphenated words in the brief's own prose (not references)
+  "re-grounding",
+  "pre-pmf",
 ]);
 
 /**
