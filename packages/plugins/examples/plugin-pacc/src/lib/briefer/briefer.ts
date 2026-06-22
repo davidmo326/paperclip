@@ -28,6 +28,7 @@ import {
   type RethinkConflict,
 } from "./do-not-rethink.js";
 import { synthesizeValidated } from "./briefer-output.js";
+import { computeJobMix, type JobMixPhase, type JobClass } from "./job-mix.js";
 
 /**
  * Default model for the briefer (configurable per principal). Sonnet 4.6 is
@@ -143,6 +144,24 @@ export async function runBriefer(
     sourceRefs: [],
   };
 
+  // projectId -> name, so the renderer never shows raw UUIDs.
+  const projectNames: Record<string, string> = {};
+  for (const p of projects) projectNames[p.projectId] = p.projectName;
+
+  // Job-mix table (T-3.4) — compute from the cards (no activity stream yet, so
+  // it falls back to each project's dominant job class).
+  const jobMix = computeJobMix(
+    projects.map((p) => ({
+      projectId: p.projectId,
+      projectName: p.projectName,
+      phase: (p.card.currentPhase as JobMixPhase | null) ?? null,
+      jobClassificationDominant:
+        (p.card as { jobClassificationDominant?: JobClass | null }).jobClassificationDominant ?? null,
+    })),
+    [],
+    { now },
+  );
+
   const brief: Brief = {
     generatedAt: now.toISOString(),
     briefDate,
@@ -160,7 +179,8 @@ export async function runBriefer(
     completedWork: [],
     authoritySafetyIssues: [],
     sourceNotes,
-    jobMix: [],
+    jobMix,
+    projectNames,
     humanFeedback: {
       useful: null,
       wrong: null,

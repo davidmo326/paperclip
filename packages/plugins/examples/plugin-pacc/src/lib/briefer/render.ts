@@ -45,6 +45,12 @@ export function renderBriefMarkdown(
 
   out.push(`# Daily Operating Brief - ${brief.briefDate}`);
   out.push("");
+  out.push(
+    "> **How to give feedback:** in **AI-Proposed Tasks** below, tick the actions you approve " +
+      "(`- [ ]` -> `- [x]`). Fill the **Human Feedback** section at the bottom (Useful / Wrong / " +
+      "Changed priority). Then run `pacc brief --feedback`.",
+  );
+  out.push("");
 
   // -- Portfolio Summary -----------------------------------------------------
   out.push("## Portfolio Summary");
@@ -78,11 +84,11 @@ export function renderBriefMarkdown(
   out.push("");
   if (brief.recommendedFocus) {
     const f = brief.recommendedFocus;
-    out.push(`- Primary project: ${f.projectId}`);
+    out.push(`- Primary project: ${nameOf(brief, f.projectId)}`);
     out.push(`- Why now: ${f.rationale}`);
     out.push(`- Next smallest action: ${f.summary}`);
     out.push(`- Job classification: ${f.jobClassification}`);
-    out.push(`- Risk if ignored: ${f.expectedArtifact ?? "_(not stated)_"}`);
+    out.push(`- Expected outcome: ${f.expectedArtifact ?? "_(not stated)_"}`);
     out.push(`- Source support: ${renderInlineSourceRefs(f.sourceRefs)}`);
   } else {
     const ph = options.omitEmptySectionPlaceholders ? "" : ` ${EMPTY_PLACEHOLDER}`;
@@ -162,7 +168,7 @@ export function renderBriefMarkdown(
     a.completedAt < b.completedAt ? 1 : a.completedAt > b.completedAt ? -1 : 0,
   );
   for (const c of completed) {
-    out.push(`- **${c.projectId}**: ${c.artifact} _(${c.completedAt})_`);
+    out.push(`- **${nameOf(brief, c.projectId)}**: ${c.artifact} _(${c.completedAt})_`);
   }
   if (completed.length === 0 && !options.omitEmptySectionPlaceholders) {
     out.push(`- ${EMPTY_PLACEHOLDER}`);
@@ -182,7 +188,7 @@ export function renderBriefMarkdown(
     const key = `${s.projectId}|${s.path}`;
     if (seenSources.has(key)) continue;
     seenSources.add(key);
-    out.push(`- **${s.projectId}**: \`${s.path}\``);
+    out.push(`- **${nameOf(brief, s.projectId)}**: \`${s.path}\``);
     writtenSources += 1;
   }
   if (writtenSources === 0 && !options.omitEmptySectionPlaceholders) {
@@ -234,6 +240,11 @@ export function renderBriefMarkdown(
 // Section helpers
 // ---------------------------------------------------------------------------
 
+/** Resolve a projectId to its display name; falls back to a short id if unknown. */
+function nameOf(brief: Brief, projectId: string): string {
+  return brief.projectNames?.[projectId] ?? `project ${projectId.slice(0, 8)}`;
+}
+
 function renderJobMixRow(row: JobMixRow): string {
   const breach = row.thresholdBreach ?? "";
   return `| ${row.projectName} | ${row.phase ?? ""} | ${pct(row.j1Pct)} | ${pct(row.j2Pct)} | ${pct(row.j3Pct)} | ${pct(row.metaPct)} | ${breach} |`;
@@ -281,7 +292,7 @@ function synthesizeAttentionRows(brief: Brief): string[] {
     } else {
       byProject.set(a.projectId, {
         projectId: a.projectId,
-        projectName: a.projectId,
+        projectName: nameOf(brief, a.projectId),
         state: "active",
         lane: "",
         staleStatus: "",

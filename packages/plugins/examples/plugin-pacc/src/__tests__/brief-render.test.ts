@@ -32,6 +32,7 @@ function emptyBrief(over: Partial<Brief> = {}): Brief {
     authoritySafetyIssues: [],
     sourceNotes: [],
     jobMix: [],
+    projectNames: { circlo: "circlo", hometrics: "hometrics", ndis: "NDIS" },
     humanFeedback: { useful: null, wrong: null, changedPriority: null, approvedActions: [] },
     warnings: [],
     ...over,
@@ -196,7 +197,7 @@ describe("renderBriefMarkdown — structural", () => {
     expect(md).toContain("- Why now: Validate the distribution channel");
     expect(md).toContain("- Next smallest action: Email cohort A");
     expect(md).toContain("- Job classification: J1_signal");
-    expect(md).toContain("- Risk if ignored:");
+    expect(md).toContain("- Expected outcome:");
     expect(md).toContain("- Source support:");
   });
 

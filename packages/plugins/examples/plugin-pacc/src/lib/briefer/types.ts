@@ -116,6 +116,11 @@ export interface Brief {
   sourceNotes: Array<{ projectId: string; path: string }>;
   /** Job-mix table (T-3.4). */
   jobMix: JobMixRow[];
+  /**
+   * projectId -> display name, so the renderer never shows raw UUIDs.
+   * Optional for back-compat with briefs persisted before this field existed.
+   */
+  projectNames?: Record<string, string>;
   /** Slot for principal feedback — populated by `pacc feedback`, T-3.9. */
   humanFeedback: {
     useful: boolean | null;
