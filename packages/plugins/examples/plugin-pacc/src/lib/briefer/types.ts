@@ -38,23 +38,40 @@ export interface ProposedAction {
   expectedArtifact: string | null;
   /** Authority level required to execute. Briefer can ONLY propose L1/L2 — L3+ requires approval. */
   requiredAuthority: AuthorityLevel;
-  /** PRD § 8.5 job classification. */
-  jobClassification: "J1_signal" | "J2_distribution" | "J3_product" | "meta";
+  /**
+   * PRD § 8.5 job classification. `null` when the source project's
+   * `jobClassificationDominant` is unset — per D-41 this must never be
+   * fabricated as `"meta"`; renderers show "unclassified" instead.
+   */
+  jobClassification: "J1_signal" | "J2_distribution" | "J3_product" | "meta" | null;
   /** Briefer's confidence, 0..1. */
   confidence: number;
   /** SourceRefs supporting this proposal (provenance per PRD § 9.7). */
   sourceRefs: Array<{ kind: string; path: string; section?: string; hash: string; capturedAt: string }>;
 }
 
-/** Job-mix snapshot — populated by T-3.4. */
+/**
+ * Job-mix snapshot — populated by T-3.4, unclassified handling per D-41/T-3.13.
+ *
+ * `j1Pct`..`metaPct` are `null` when there is no classified signal at all for
+ * the project in-window (no activities AND no `jobClassificationDominant`
+ * fallback) — the renderer shows "—" rather than fabricating 0%/100% shares.
+ * Shares are always computed over classified activity only; unclassified
+ * activity in the window is surfaced via `unclassifiedCount` and never folds
+ * into any class's percentage or into the threshold-breach guard.
+ */
 export interface JobMixRow {
   projectId: string;
   projectName: string;
   phase: string | null;
-  j1Pct: number;
-  j2Pct: number;
-  j3Pct: number;
-  metaPct: number;
+  j1Pct: number | null;
+  j2Pct: number | null;
+  j3Pct: number | null;
+  metaPct: number | null;
+  /** Count of in-window activities with no `jobClassification` set. Never attributed to any class share. */
+  unclassifiedCount: number;
+  /** True when the project's `jobClassificationDominant` field itself is unset — surfaced in Memory / Source Issues. */
+  dominantUnset: boolean;
   /** Free-text flag if a threshold is breached (e.g. pre-PMF + J1 < 50%). */
   thresholdBreach: string | null;
 }

@@ -109,9 +109,11 @@ export async function runBriefer(
       rationale: p.card.goal.answer ?? "(no intent declared)",
       expectedArtifact: null,
       requiredAuthority: "L1" as const,
+      // D-41: a missing jobClassificationDominant must never masquerade as
+      // "meta" — render null (renderer shows "unclassified").
       jobClassification:
-        (p.card as { jobClassificationDominant?: "J1_signal" | "J2_distribution" | "J3_product" | "meta" })
-          .jobClassificationDominant ?? "meta",
+        (p.card as { jobClassificationDominant?: "J1_signal" | "J2_distribution" | "J3_product" | "meta" | null })
+          .jobClassificationDominant ?? null,
       confidence: p.card.confidence ?? 0.5,
       sourceRefs: p.card.nextActions.sourceRefs.map((r) => ({
         kind: r.kind,
@@ -279,9 +281,10 @@ function recommendFocusFromCards(
     rationale: chosen.card.goal.answer ?? "(no intent declared)",
     expectedArtifact: null,
     requiredAuthority: "L1",
+    // D-41: never fabricate "meta" for an unset field — render null.
     jobClassification:
-      (chosen.card as { jobClassificationDominant?: "J1_signal" | "J2_distribution" | "J3_product" | "meta" })
-        .jobClassificationDominant ?? "meta",
+      (chosen.card as { jobClassificationDominant?: "J1_signal" | "J2_distribution" | "J3_product" | "meta" | null })
+        .jobClassificationDominant ?? null,
     confidence: chosen.card.confidence ?? 0.5,
     sourceRefs: next.sourceRefs.map((r) => ({
       kind: r.kind,

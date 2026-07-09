@@ -33,7 +33,13 @@ export type JobClass = "J1_signal" | "J2_distribution" | "J3_product" | "meta";
 /** One activity record — a task assignment or decision tagged with a job class. */
 export interface JobActivity {
   projectId: string;
-  jobClassification: JobClass;
+  /**
+   * `null` when the source task/decision has no `jobClassification` set
+   * (D-41: never fabricated as `"meta"`). Unclassified activities are
+   * counted (`JobMixRow.unclassifiedCount`) but excluded from every class's
+   * percentage — shares are computed over classified activity only.
+   */
+  jobClassification: JobClass | null;
   /** ISO-8601 timestamp. */
   at: string;
 }
@@ -109,22 +115,29 @@ export function computeJobMix(
       currentStart,
     );
 
-    const currentTotal = totalCount(current);
+    // Shares are computed over classified activity only — `counts` never
+    // includes unclassified entries (see `countWindow`).
+    const currentTotal = totalCount(current.counts);
     let row: JobMixRow;
 
     if (currentTotal === 0) {
-      // Fallback: project has no activity in window. Render the dominant
-      // job class as 100% to keep the brief signal-rich.
+      // Fallback: project has no *classified* activity in window. Render the
+      // dominant job class as 100% to keep the brief signal-rich; when the
+      // dominant field is also unset, there is no classified signal at all —
+      // render as unclassified (null shares) rather than fabricating a class.
       row = buildFallbackRow(project);
     } else {
-      row = buildRowFromCounts(project, current);
+      row = buildRowFromCounts(project, current.counts);
     }
+    row.unclassifiedCount = current.unclassifiedCount;
 
-    // Three-clause guard
+    // Three-clause guard. A row with no classified signal (`j1Pct === null`)
+    // cannot trigger — or mask — a breach on its own; there's nothing to
+    // measure against clause (b).
     row.thresholdBreach = computeThresholdBreach({
       phase: project.phase,
       currentJ1Pct: row.j1Pct,
-      priorJ1Pct: percentageOf("J1_signal", prior),
+      priorJ1Pct: percentageOf("J1_signal", prior.counts),
       windowDays,
     });
 
@@ -142,17 +155,25 @@ const PRE_PMF_PHASES = new Set<JobMixPhase>(["search", "validate", "exploration"
 
 interface BreachInput {
   phase: JobMixPhase | null;
-  currentJ1Pct: number;
+  /**
+   * `null` when the project has no classified activity at all in-window
+   * (unclassified/unset, per D-41). There is nothing to measure clause (b)
+   * against, so a `null` share can never trigger — or mask — a breach.
+   */
+  currentJ1Pct: number | null;
   /**
    * J1 share in the immediately-preceding 7d window. `NaN` when the prior
-   * window had zero activities (treat as "no baseline" → not enough data
-   * to flag; clause (c) fails).
+   * window had zero *classified* activities (treat as "no baseline" → not
+   * enough data to flag; clause (c) fails).
    */
   priorJ1Pct: number;
   windowDays: number;
 }
 
 export function computeThresholdBreach(input: BreachInput): string | null {
+  // No classified signal at all → nothing to flag.
+  if (input.currentJ1Pct === null) return null;
+
   // Clause (a): pre-PMF
   if (input.phase === null || !PRE_PMF_PHASES.has(input.phase)) return null;
 
@@ -186,21 +207,32 @@ function totalCount(c: JobCounts): number {
   return c.J1_signal + c.J2_distribution + c.J3_product + c.meta;
 }
 
+interface WindowCounts {
+  counts: JobCounts;
+  /** Activities in-window with `jobClassification === null` — never folded into `counts`. */
+  unclassifiedCount: number;
+}
+
 function countWindow(
   activities: readonly JobActivity[],
   projectId: string,
   startMs: number,
   endMs: number,
-): JobCounts {
-  const out = emptyCounts();
+): WindowCounts {
+  const counts = emptyCounts();
+  let unclassifiedCount = 0;
   for (const a of activities) {
     if (a.projectId !== projectId) continue;
     const t = Date.parse(a.at);
     if (!Number.isFinite(t)) continue;
     if (t < startMs || t >= endMs) continue;
-    out[a.jobClassification] += 1;
+    if (a.jobClassification === null) {
+      unclassifiedCount += 1;
+      continue;
+    }
+    counts[a.jobClassification] += 1;
   }
-  return out;
+  return { counts, unclassifiedCount };
 }
 
 function percentageOf(cls: JobClass, counts: JobCounts): number {
@@ -219,14 +251,35 @@ function buildRowFromCounts(project: JobMixProjectInput, c: JobCounts): JobMixRo
     j2Pct: (c.J2_distribution / total) * 100,
     j3Pct: (c.J3_product / total) * 100,
     metaPct: (c.meta / total) * 100,
+    unclassifiedCount: 0, // set by caller after compute
+    dominantUnset: project.jobClassificationDominant === null,
     thresholdBreach: null, // set by caller after compute
   };
 }
 
 function buildFallbackRow(project: JobMixProjectInput): JobMixRow {
-  // No activity → render the dominant class as 100%, others 0. When even
-  // dominant is null, show all zeros — caller's renderer will print 0%
-  // across the board, which is correct ("no signal here").
+  const dominantUnset = project.jobClassificationDominant === null;
+  if (dominantUnset) {
+    // No classified activity AND no dominant fallback → no signal at all.
+    // Per D-41: never fabricate a class (e.g. "meta"); render as
+    // unclassified (null shares) so the renderer shows "—" instead of a
+    // misleading 0%/100% split.
+    return {
+      projectId: project.projectId,
+      projectName: project.projectName,
+      phase: project.phase,
+      j1Pct: null,
+      j2Pct: null,
+      j3Pct: null,
+      metaPct: null,
+      unclassifiedCount: 0, // set by caller after compute
+      dominantUnset: true,
+      thresholdBreach: null,
+    };
+  }
+
+  // No activity in window, but the project declares a dominant class →
+  // render it at 100%, others 0.
   const j1 = project.jobClassificationDominant === "J1_signal" ? 100 : 0;
   const j2 = project.jobClassificationDominant === "J2_distribution" ? 100 : 0;
   const j3 = project.jobClassificationDominant === "J3_product" ? 100 : 0;
@@ -239,6 +292,8 @@ function buildFallbackRow(project: JobMixProjectInput): JobMixRow {
     j2Pct: j2,
     j3Pct: j3,
     metaPct: meta,
+    unclassifiedCount: 0, // set by caller after compute
+    dominantUnset: false,
     thresholdBreach: null,
   };
 }
