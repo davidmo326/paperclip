@@ -226,7 +226,9 @@ export function renderWeeklyReviewMarkdown(review: WeeklyReview): string {
   return out.join("\n").replace(/\n+$/, "") + "\n";
 }
 
-function pct(n: number): string {
+function pct(n: number | null): string {
+  // `null` (no classified signal for the project, per D-41) renders as "—".
+  if (n === null) return "—";
   return `${Math.round(n)}%`;
 }
 

@@ -87,7 +87,7 @@ export function renderBriefMarkdown(
     out.push(`- Primary project: ${nameOf(brief, f.projectId)}`);
     out.push(`- Why now: ${f.rationale}`);
     out.push(`- Next smallest action: ${f.summary}`);
-    out.push(`- Job classification: ${f.jobClassification}`);
+    out.push(`- Job classification: ${f.jobClassification ?? "unclassified"}`);
     out.push(`- Expected outcome: ${f.expectedArtifact ?? "_(not stated)_"}`);
     out.push(`- Source support: ${renderInlineSourceRefs(f.sourceRefs)}`);
   } else {
@@ -120,7 +120,17 @@ export function renderBriefMarkdown(
   out.push("");
   const memoryIssues = [...brief.staleConflictedMemory].sort(byStaleKind);
   for (const row of memoryIssues) out.push(renderStaleRollupLine(row));
-  if (memoryIssues.length === 0 && !options.omitEmptySectionPlaceholders) {
+  // D-41: every project with an unset jobClassificationDominant is a
+  // data-quality gap the brief itself should prompt the principal to fix.
+  const unclassifiedProjects = [...brief.jobMix]
+    .filter((r) => r.dominantUnset)
+    .sort(byProjectName);
+  for (const row of unclassifiedProjects) out.push(renderUnclassifiedDominantLine(row));
+  if (
+    memoryIssues.length === 0 &&
+    unclassifiedProjects.length === 0 &&
+    !options.omitEmptySectionPlaceholders
+  ) {
     out.push(`- ${EMPTY_PLACEHOLDER}`);
   }
   out.push("");
@@ -246,12 +256,17 @@ function nameOf(brief: Brief, projectId: string): string {
 }
 
 function renderJobMixRow(row: JobMixRow): string {
-  const breach = row.thresholdBreach ?? "";
+  const breachParts: string[] = [];
+  if (row.thresholdBreach) breachParts.push(row.thresholdBreach);
+  if (row.unclassifiedCount > 0) breachParts.push(`${row.unclassifiedCount} unclassified`);
+  const breach = breachParts.join("; ");
   return `| ${row.projectName} | ${row.phase ?? ""} | ${pct(row.j1Pct)} | ${pct(row.j2Pct)} | ${pct(row.j3Pct)} | ${pct(row.metaPct)} | ${breach} |`;
 }
 
-function pct(n: number): string {
-  // Stable formatting — same number → same string.
+function pct(n: number | null): string {
+  // Stable formatting — same number → same string. `null` (no classified
+  // signal, per D-41) renders as "—" rather than a fabricated 0%.
+  if (n === null) return "—";
   return `${Math.round(n)}%`;
 }
 
@@ -317,9 +332,13 @@ function renderStaleRollupLine(row: StaleRollupRow): string {
   return `- [ ] **${row.kind}** (${row.count}) — projects: ${projects}`;
 }
 
+function renderUnclassifiedDominantLine(row: JobMixRow): string {
+  return `- [ ] **${row.projectName}** — unclassified — set jobClassificationDominant`;
+}
+
 function renderProposedActionLine(a: ProposedAction): string {
   const artifact = a.expectedArtifact ?? "(no expected artifact)";
-  return `- [ ] **${a.summary}** — ${artifact} — ${a.requiredAuthority} — ${a.jobClassification}`;
+  return `- [ ] **${a.summary}** — ${artifact} — ${a.requiredAuthority} — ${a.jobClassification ?? "unclassified"}`;
 }
 
 function renderInlineSourceRefs(
