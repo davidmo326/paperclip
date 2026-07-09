@@ -39,16 +39,23 @@ export function createValueAnchorService(options: ValueAnchorServiceOptions): Va
     ...(options.loaderDeps ?? createVaultLoaderDeps(options.vaultRoot)),
     registryRelPath: options.registryRelPath,
   };
-  const registryPath = path.join(options.vaultRoot, options.registryRelPath ?? "Value Anchors.md");
+  // Fallback only — the loader reports the registry path it actually used
+  // (discovery may find the note in a subfolder, per real T-0.7 placement).
+  const fallbackRegistryPath = path.join(
+    options.vaultRoot,
+    options.registryRelPath ?? "Value Anchors.md",
+  );
 
   let anchors: ValueAnchor[] = [];
   let warnings: string[] = [];
+  let registryPath: string = fallbackRegistryPath;
   let loaded = false;
 
   const reload = async (): Promise<void> => {
     const result = await loadValueAnchors(deps);
     anchors = result.anchors;
     warnings = result.warnings;
+    registryPath = result.registryPath ?? fallbackRegistryPath;
     loaded = true;
   };
 

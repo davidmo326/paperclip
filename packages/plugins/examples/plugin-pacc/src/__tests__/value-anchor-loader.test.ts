@@ -99,6 +99,37 @@ describe("loadValueAnchors", () => {
     expect(warnings.some((w) => w.includes("Ghost Note"))).toBe(true);
   });
 
+  it("discovers the registry note vault-wide when it is not at the vault root (real T-0.7 placement)", async () => {
+    // The principal authored the note at 10_Builds/Personal AI Control Plane/,
+    // not the vault root — discovery must work regardless of folder.
+    const files: Record<string, string> = {
+      "/vault/10_Builds/Personal AI Control Plane/Value Anchors.md": REGISTRY_NOTE,
+      "/vault/The three jobs of a solo entrepreneur.md": "# Jobs\ncontent",
+      "/vault/Zone 2 entrepreneurship.md": "# Zone 2\ncontent",
+      "/vault/30_Principles/Nested Anchor Note.md": "# Nested\ncontent",
+    };
+    const deps: ValueAnchorLoaderDeps = {
+      vaultRoot: "/vault",
+      async readFile(absPath: string) {
+        const content = files[absPath];
+        if (content === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return content;
+      },
+      async listMarkdownFiles() {
+        return Object.keys(files);
+      },
+    };
+    const { anchors, warnings, registryPath } = await loadValueAnchors(deps);
+    expect(registryPath).toBe("/vault/10_Builds/Personal AI Control Plane/Value Anchors.md");
+    expect(anchors.length).toBeGreaterThan(0);
+    expect(warnings.some((w) => w.includes("not found"))).toBe(false);
+  });
+
+  it("returns the registry path used, so the mediator protects the real location", async () => {
+    const { registryPath } = await loadValueAnchors(makeDeps());
+    expect(registryPath).toBe("/vault/Value Anchors.md");
+  });
+
   it("returns empty anchors + a warning when the registry note is missing", async () => {
     const deps = makeDeps({
       async readFile() {

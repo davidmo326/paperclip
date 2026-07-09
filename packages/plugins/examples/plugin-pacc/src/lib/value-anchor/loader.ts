@@ -46,6 +46,11 @@ export interface ValueAnchorLoaderDeps {
 export interface ValueAnchorLoadResult {
   anchors: ValueAnchor[];
   warnings: string[];
+  /**
+   * Absolute path of the registry note actually used (null if not found).
+   * The mediator protects THIS path — never a hardcoded guess.
+   */
+  registryPath: string | null;
 }
 
 const REGISTRY_HEADING = "registry";
@@ -55,16 +60,46 @@ const REGISTRY_LINE = /^-\s*\[\[([^\]|#]+?)(?:[|#][^\]]*)?\]\]\s*(?:[—–-]\s*
 export async function loadValueAnchors(
   deps: ValueAnchorLoaderDeps,
 ): Promise<ValueAnchorLoadResult> {
-  const registryPath = path.join(deps.vaultRoot, deps.registryRelPath ?? "Value Anchors.md");
   const warnings: string[] = [];
+  const files = await deps.listMarkdownFiles();
 
-  let registryContent: string;
-  try {
-    registryContent = await deps.readFile(registryPath);
-  } catch {
+  // basename (lowercased, no extension) → absolute paths
+  const byBasename = new Map<string, string[]>();
+  for (const file of files) {
+    const key = path.basename(file, path.extname(file)).toLowerCase();
+    const existing = byBasename.get(key);
+    if (existing) existing.push(file);
+    else byBasename.set(key, [file]);
+  }
+
+  // Registry discovery: explicit path first, then vault-wide by basename —
+  // T-0.7 placed the real note under 10_Builds/, not the vault root, and
+  // the principal may move it again. Shortest path wins for determinism.
+  const explicitPath = path.join(deps.vaultRoot, deps.registryRelPath ?? "Value Anchors.md");
+  const registryBasename = path
+    .basename(deps.registryRelPath ?? "Value Anchors.md", ".md")
+    .toLowerCase();
+  const discovered = (byBasename.get(registryBasename) ?? [])
+    .slice()
+    .sort((a, b) => a.length - b.length);
+  const candidates = [explicitPath, ...discovered.filter((p) => p !== explicitPath)];
+
+  let registryContent: string | null = null;
+  let registryPath: string | null = null;
+  for (const candidate of candidates) {
+    try {
+      registryContent = await deps.readFile(candidate);
+      registryPath = candidate;
+      break;
+    } catch {
+      // try next candidate
+    }
+  }
+  if (registryContent === null || registryPath === null) {
     return {
       anchors: [],
-      warnings: [`value-anchor registry note not found at ${registryPath}; M1b set is empty`],
+      warnings: [`value-anchor registry note not found at ${explicitPath} or anywhere in the vault; M1b set is empty`],
+      registryPath: null,
     };
   }
 
@@ -73,16 +108,8 @@ export async function loadValueAnchors(
     return {
       anchors: [],
       warnings: [`registry note at ${registryPath} has no "## Registry" section; M1b set is empty`],
+      registryPath,
     };
-  }
-
-  // basename (lowercased, no extension) → absolute paths
-  const byBasename = new Map<string, string[]>();
-  for (const file of await deps.listMarkdownFiles()) {
-    const key = path.basename(file, path.extname(file)).toLowerCase();
-    const existing = byBasename.get(key);
-    if (existing) existing.push(file);
-    else byBasename.set(key, [file]);
   }
 
   const anchors: ValueAnchor[] = [];
@@ -105,7 +132,7 @@ export async function loadValueAnchors(
     anchors.push({ name, purpose, path: candidates[0]!, resolved: true });
   }
 
-  return { anchors, warnings };
+  return { anchors, warnings, registryPath };
 }
 
 /**
