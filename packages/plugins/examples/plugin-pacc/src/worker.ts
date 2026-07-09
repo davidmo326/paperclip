@@ -25,7 +25,7 @@ import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
 import { runScheduledBrief } from "./lib/briefer/scheduled-brief.js";
 import {
-  makeScheduledBriefDeps,
+  makeObsidianGuard, makeScheduledBriefDeps,
   makeCaptureFeedbackDeps,
   assembleProjectCards,
   resumeBrieferAction,
@@ -447,7 +447,15 @@ const plugin: PaperclipPlugin = definePlugin({
         // API key). Unset → deterministic offline brief. Either way the
         // pause-check (T-3.7), overlap guard (T-3.6), and kill-criterion meter
         // (T-3.10) are wired via the plugin_state-backed deps assembled here.
-        const { deps, model } = await makeScheduledBriefDeps(ctx);
+        const { deps, model, eventCompanyId } = await makeScheduledBriefDeps(ctx);
+        // T-2.4: fresh registry read per run = morning-sweep reload semantics.
+        const m1b = await makeObsidianGuard(ctx, eventCompanyId);
+        if (m1b.registryWarnings.length > 0) {
+          ctx.logger.warn("value-anchor registry warnings", {
+            runId: job.runId,
+            warnings: m1b.registryWarnings,
+          });
+        }
         ctx.logger.info("daily-brief model mode", {
           runId: job.runId,
           modelEnabled: model.enabled,
@@ -457,6 +465,7 @@ const plugin: PaperclipPlugin = definePlugin({
           runId: job.runId,
           obsidianBaseDir: obsidianDailyDir(),
           brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+          obsidianGuard: m1b.guard,
         });
         ctx.logger.info("daily-brief job complete", {
           runId: job.runId,
@@ -517,6 +526,7 @@ const plugin: PaperclipPlugin = definePlugin({
           baseDir: obsidianDailyDir(),
           briefDate: review.weekLabel,
           filenamePrefix: "Weekly Portfolio Review - ",
+          guard: (await makeObsidianGuard(ctx)).guard,
         });
         ctx.logger.info("weekly-review job complete", {
           runId: job.runId,
@@ -546,6 +556,7 @@ const plugin: PaperclipPlugin = definePlugin({
           baseDir: obsidianDailyDir(),
           briefDate: prep.date,
           filenamePrefix: "Weekend Prep - ",
+          guard: (await makeObsidianGuard(ctx)).guard,
         });
         ctx.logger.info("weekend-prep job complete", {
           runId: job.runId,
@@ -650,11 +661,13 @@ const plugin: PaperclipPlugin = definePlugin({
     ctx.actions.register("run-brief", async (params) => {
       const dateStr = typeof params.date === "string" ? params.date : "";
       const now = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? new Date(`${dateStr}T08:00:00.000Z`) : new Date();
-      const { deps, model } = await makeScheduledBriefDeps(ctx);
+      const { deps, model, eventCompanyId } = await makeScheduledBriefDeps(ctx);
+      const m1b = await makeObsidianGuard(ctx, eventCompanyId);
       const result = await runScheduledBrief(deps, {
         now,
         obsidianBaseDir: obsidianDailyDir(),
         brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+        obsidianGuard: m1b.guard,
       });
       return {
         kind: result.kind,

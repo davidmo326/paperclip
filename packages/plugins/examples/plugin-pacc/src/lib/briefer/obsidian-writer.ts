@@ -39,6 +39,14 @@ export interface WriteObsidianBriefOptions {
   briefDate: string;
   /** Filename prefix. Default `Daily Brief - `. */
   filenamePrefix?: string;
+  /**
+   * T-2.4 M1b mediator (`createObsidianFileWriter`). When provided, the
+   * disk write is delegated to it — protection check, audit event, and the
+   * idempotent atomic write all happen inside the mediator. When absent,
+   * the legacy direct write below runs (the brief path is fixed-format
+   * under 00_Daily, safe by construction).
+   */
+  guard?: (targetPath: string, content: string) => Promise<ObsidianBriefWriteResult>;
 }
 
 /**
@@ -52,6 +60,11 @@ export async function writeObsidianBrief(
   const prefix = options.filenamePrefix ?? "Daily Brief - ";
   const filename = `${prefix}${options.briefDate}.md`;
   const targetPath = path.join(options.baseDir, filename);
+
+  if (options.guard) {
+    return options.guard(targetPath, markdown);
+  }
+
   const byteLength = Buffer.byteLength(markdown, "utf8");
 
   // Fast path: file exists + bytes match → no-op.

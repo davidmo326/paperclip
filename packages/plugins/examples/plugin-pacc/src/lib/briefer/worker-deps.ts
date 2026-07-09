@@ -62,8 +62,14 @@ import type {
   ScheduledBriefDeps,
 } from "./scheduled-brief.js";
 import type { KillCriterionMetric } from "./kill-criterion.js";
+import nodePath from "node:path";
 import { callModelViaClaudeCli } from "./model-claude-cli.js";
 import { BRIEFER_DEFAULT_MODEL } from "./briefer.js";
+import { createValueAnchorService } from "../value-anchor/service.js";
+import {
+  createObsidianFileWriter,
+  type ObsidianFileWriter,
+} from "../value-anchor/write-obsidian-file.js";
 import type { CaptureFeedbackDeps } from "./capture-feedback.js";
 import type { BriefFeedbackRow } from "./feedback.js";
 
@@ -419,6 +425,54 @@ export interface MakeScheduledBriefDepsResult {
   eventCompanyId: string;
   /** Resolved model wiring — worker uses this to set skipModel/modelId. */
   model: BrieferModelConfig;
+}
+
+// ---------------------------------------------------------------------------
+// T-2.4: M1b write-mediator assembly
+// ---------------------------------------------------------------------------
+
+export interface ObsidianGuard {
+  guard: ObsidianFileWriter;
+  vaultRoot: string;
+  /** Loader warnings (unresolved registry links etc.) — surface in logs/brief. */
+  registryWarnings: string[];
+}
+
+/**
+ * Builds the T-2.4 write-mediator from a fresh registry read. Called at the
+ * start of every vault-writing job run, which gives PRD § 9.6 its
+ * "reload at every morning sweep" semantics for free — no long-lived cache.
+ */
+export async function makeObsidianGuard(
+  ctx: WorkerCtx,
+  eventCompanyId?: string,
+): Promise<ObsidianGuard> {
+  const companyId =
+    eventCompanyId ?? (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? "instance";
+  const vaultRoot = resolveVaultRoot();
+  const service = createValueAnchorService({ vaultRoot });
+  await service.reload();
+  const guard = createObsidianFileWriter({
+    vaultRoot,
+    getProtectedPaths: service.getProtectedPaths,
+    async emitEvent(name, payload) {
+      await ctx.events.emit(name, companyId, payload);
+    },
+  });
+  return { guard, vaultRoot, registryWarnings: service.getWarnings() };
+}
+
+/**
+ * Vault root resolution. PACC_VAULT_ROOT wins; else the parent of
+ * PACC_OBSIDIAN_DIR (which points at 00_Daily); else the standard location.
+ */
+function resolveVaultRoot(): string {
+  const override = process.env.PACC_VAULT_ROOT?.trim();
+  if (override) return override;
+  const dailyDir = process.env.PACC_OBSIDIAN_DIR?.trim();
+  if (dailyDir) return nodePath.dirname(dailyDir);
+  const home = process.env.HOME?.trim();
+  return home ? `${home}/llm_shared/Obsidian` : "/home/ubuntu/llm_shared/Obsidian";
 }
 
 export async function makeScheduledBriefDeps(
