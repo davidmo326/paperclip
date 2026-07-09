@@ -23,6 +23,7 @@ import {
   obsidianBriefExists,
   writeObsidianBrief,
   type ObsidianBriefWriteResult,
+  type WriteObsidianBriefOptions,
 } from "./obsidian-writer.js";
 import {
   acquireLock,
@@ -125,6 +126,11 @@ export interface RunScheduledBriefOptions {
   obsidianBaseDir?: string;
   /** Lock TTL passed through to acquireLock. */
   lockStaleAfterMs?: number;
+  /**
+   * T-2.4 M1b write-mediator. When provided, every Obsidian write in this
+   * run flows through it (protection check + audit event + atomic write).
+   */
+  obsidianGuard?: WriteObsidianBriefOptions["guard"];
   /** Pass-through options to runBriefer (e.g. skipModel). */
   brieferOptions?: RunBrieferOptions;
 }
@@ -184,6 +190,7 @@ export async function runScheduledBrief(
       const obsidianWrite = await writeObsidianBrief(stub, {
         baseDir: obsidianBaseDir,
         briefDate,
+        guard: options.obsidianGuard,
       });
       deps.logger.warn("scheduled brief: briefer is self-paused; wrote stub", {
         runId: options.runId,
@@ -322,6 +329,7 @@ export async function runScheduledBrief(
     const obsidianWrite = await writeObsidianBrief(markdown, {
       baseDir: obsidianBaseDir,
       briefDate: brief.briefDate,
+      guard: options.obsidianGuard,
     });
     deps.logger.info("scheduled brief: obsidian write", {
       runId: options.runId,
