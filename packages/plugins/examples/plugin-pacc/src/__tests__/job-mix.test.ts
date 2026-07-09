@@ -102,18 +102,28 @@ describe("computeJobMix — counting + windowing", () => {
     expect(rows[0].j2Pct).toBe(0);
   });
 
-  it("returns all-zero shares when both window and dominant are empty", () => {
+  it("renders unclassified (null shares) when both window and dominant are empty (D-41)", () => {
+    // No classified activity + no jobClassificationDominant fallback → never
+    // fabricate a class (e.g. "meta"); shares are null, not zero.
     const rows = computeJobMix([project()], [], { now: NOW });
-    expect(rows[0]).toMatchObject({ j1Pct: 0, j2Pct: 0, j3Pct: 0, metaPct: 0 });
+    expect(rows[0]).toMatchObject({
+      j1Pct: null,
+      j2Pct: null,
+      j3Pct: null,
+      metaPct: null,
+      dominantUnset: true,
+      unclassifiedCount: 0,
+    });
   });
 
-  it("ignores activities for other projects", () => {
+  it("ignores activities for other projects (renders unclassified, not 0%)", () => {
     const rows = computeJobMix(
       [project()],
       [act("other", "J1_signal", 1), act("other", "J1_signal", 2)],
       { now: NOW },
     );
-    expect(rows[0].j1Pct).toBe(0); // p-1 has no activities → no signal
+    // p-1 has no activities of its own and no dominant fallback → unclassified.
+    expect(rows[0].j1Pct).toBeNull();
   });
 
   it("ignores activities with non-parseable timestamps", () => {
@@ -411,5 +421,75 @@ describe("computeJobMix — integration with three-clause guard", () => {
       projectName: "Circlo",
       phase: "validate",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. D-41 / T-3.13 — unclassified activity handling
+// ---------------------------------------------------------------------------
+
+describe("computeJobMix — unclassified activity (D-41)", () => {
+  it("excludes unclassified activities from every class's percentage, reports them as a count", () => {
+    const rows = computeJobMix(
+      [project({ jobClassificationDominant: "J1_signal" })],
+      [
+        act("p-1", "J1_signal", 1),
+        act("p-1", "J1_signal", 2),
+        act("p-1", null, 3),
+        act("p-1", null, 4),
+      ],
+      { now: NOW },
+    );
+    // 2 classified J1 out of 2 classified total → 100%, NOT diluted by the
+    // 2 unclassified entries.
+    expect(rows[0].j1Pct).toBe(100);
+    expect(rows[0].j2Pct).toBe(0);
+    expect(rows[0].unclassifiedCount).toBe(2);
+  });
+
+  it("cannot trigger a J1-breach on its own: a pre-PMF project with zero classified activity never flags", () => {
+    const rows = computeJobMix(
+      [project({ phase: "validate", jobClassificationDominant: null })],
+      [act("p-1", null, 1), act("p-1", null, 2), act("p-1", null, 3)],
+      { now: NOW },
+    );
+    expect(rows[0].j1Pct).toBeNull();
+    expect(rows[0].unclassifiedCount).toBe(3);
+    expect(rows[0].thresholdBreach).toBeNull();
+    expect(rows[0].dominantUnset).toBe(true);
+  });
+
+  it("cannot mask a real J1-breach: unclassified activity in the window doesn't dilute the classified share", () => {
+    // Prior 7d: 4 J1 → 100%. Current 7d: 1 J1 + 4 J2 (classified) + 10
+    // unclassified → the unclassified noise must not change the 20% figure.
+    const activities: JobActivity[] = [
+      act("p-1", "J1_signal", 1),
+      act("p-1", "J2_distribution", 2),
+      act("p-1", "J2_distribution", 3),
+      act("p-1", "J2_distribution", 4),
+      act("p-1", "J2_distribution", 5),
+      ...Array.from({ length: 10 }, (_, i) => act("p-1", null, 1 + (i % 6))),
+      act("p-1", "J1_signal", 8),
+      act("p-1", "J1_signal", 9),
+      act("p-1", "J1_signal", 10),
+      act("p-1", "J1_signal", 11),
+    ];
+    const rows = computeJobMix([project({ phase: "validate" })], activities, { now: NOW });
+    expect(rows[0].j1Pct).toBe(20);
+    expect(rows[0].unclassifiedCount).toBe(10);
+    expect(rows[0].thresholdBreach).not.toBeNull();
+    expect(rows[0].thresholdBreach).toContain("not recovering");
+  });
+});
+
+describe("computeThresholdBreach — D-41: null share (unclassified) never breaches", () => {
+  it("returns null when currentJ1Pct is null even if phase/priorJ1Pct would otherwise flag", () => {
+    const breach = computeThresholdBreach({
+      phase: "validate",
+      currentJ1Pct: null,
+      priorJ1Pct: 40,
+      windowDays: 7,
+    });
+    expect(breach).toBeNull();
   });
 });

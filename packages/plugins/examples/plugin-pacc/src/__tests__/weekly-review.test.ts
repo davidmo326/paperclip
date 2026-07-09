@@ -35,6 +35,8 @@ function jobMixRow(over: Partial<JobMixRow> = {}): JobMixRow {
     j2Pct: 20,
     j3Pct: 10,
     metaPct: 10,
+    unclassifiedCount: 0,
+    dominantUnset: false,
     thresholdBreach: null,
     ...over,
   };
