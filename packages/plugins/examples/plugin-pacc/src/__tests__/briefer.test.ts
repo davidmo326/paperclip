@@ -305,6 +305,42 @@ describe("runBriefer — happy path", () => {
     expect(brief.doNotRethinkAlerts[0].projectId).toBe("p-1");
   });
 
+  it("D-41: never fabricates 'meta' for an unset jobClassificationDominant — highLeverageActions and recommendedFocus render null", async () => {
+    state.projects = [projectInput("p-1")]; // jobClassificationDominant unset by default
+    const brief = await runBriefer(makeDeps(state), { now: NOW });
+    expect(brief.recommendedFocus?.jobClassification).toBeNull();
+    expect(brief.highLeverageActions[0]?.jobClassification).toBeNull();
+  });
+
+  it("D-41: preserves a real jobClassificationDominant when it IS set", async () => {
+    state.projects = [
+      projectInput(
+        "p-1",
+        makeCard("p-1", { cpsPatch: { jobClassificationDominant: "J1_signal" } }),
+      ),
+    ];
+    const brief = await runBriefer(makeDeps(state), { now: NOW });
+    expect(brief.recommendedFocus?.jobClassification).toBe("J1_signal");
+    expect(brief.highLeverageActions[0]?.jobClassification).toBe("J1_signal");
+  });
+
+  it("D-41: every project with unset jobClassificationDominant surfaces in jobMix as dominantUnset", async () => {
+    state.projects = [
+      projectInput("p-1"), // unset
+      projectInput(
+        "p-2",
+        makeCard("p-2", { cpsPatch: { jobClassificationDominant: "J2_distribution" } }),
+      ),
+    ];
+    const brief = await runBriefer(makeDeps(state), { now: NOW });
+    const row1 = brief.jobMix.find((r) => r.projectId === "p-1");
+    const row2 = brief.jobMix.find((r) => r.projectId === "p-2");
+    expect(row1?.dominantUnset).toBe(true);
+    expect(row1?.j1Pct).toBeNull();
+    expect(row2?.dominantUnset).toBe(false);
+    expect(row2?.j2Pct).toBe(100);
+  });
+
   it("collects per-project warnings into brief.warnings", async () => {
     const card = makeCard("p-1");
     state.projects = [

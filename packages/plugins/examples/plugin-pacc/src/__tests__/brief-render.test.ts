@@ -73,6 +73,8 @@ function fullBrief(): Brief {
         j2Pct: 20,
         j3Pct: 10,
         metaPct: 10,
+        unclassifiedCount: 0,
+        dominantUnset: false,
         thresholdBreach: null,
       },
       {
@@ -83,6 +85,8 @@ function fullBrief(): Brief {
         j2Pct: 30,
         j3Pct: 30,
         metaPct: 10,
+        unclassifiedCount: 0,
+        dominantUnset: false,
         thresholdBreach: "pre-PMF + J1 < 50%",
       },
     ],
@@ -228,6 +232,73 @@ describe("renderBriefMarkdown — structural", () => {
     expect(md.endsWith("\n")).toBe(true);
     expect(md.endsWith("\n\n")).toBe(false);
     expect(md.includes("\r")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. D-41 / T-3.13 — unclassified job-classification rendering
+// ---------------------------------------------------------------------------
+
+describe("renderBriefMarkdown — D-41 unclassified rendering", () => {
+  it("renders '—' (not 0%/meta) for a project with no classified signal, and lists it under Memory / Source Issues", () => {
+    const brief = fullBrief();
+    brief.jobMix = [
+      ...brief.jobMix,
+      {
+        projectId: "unclassified-proj",
+        projectName: "Unclassified Proj",
+        phase: "validate",
+        j1Pct: null,
+        j2Pct: null,
+        j3Pct: null,
+        metaPct: null,
+        unclassifiedCount: 0,
+        dominantUnset: true,
+        thresholdBreach: null,
+      },
+    ];
+    const md = renderBriefMarkdown(brief);
+    // Job Mix table row shows dashes, not 0%/meta.
+    expect(md).toMatch(/\| Unclassified Proj \| validate \| — \| — \| — \| — \| *\|/);
+    // Memory / Source Issues carries the data-quality prompt.
+    expect(md).toContain("- [ ] **Unclassified Proj** — unclassified — set jobClassificationDominant");
+  });
+
+  it("does not add a Memory / Source Issues line for classified projects", () => {
+    const md = renderBriefMarkdown(fullBrief());
+    expect(md).not.toContain("Circlo** — unclassified");
+    expect(md).not.toContain("Hometrics** — unclassified");
+  });
+
+  it("reports unclassified activity as a count in the Job Mix row without touching class percentages", () => {
+    const brief = fullBrief();
+    brief.jobMix = [
+      {
+        projectId: "circlo",
+        projectName: "Circlo",
+        phase: "validate",
+        j1Pct: 60,
+        j2Pct: 20,
+        j3Pct: 10,
+        metaPct: 10,
+        unclassifiedCount: 4,
+        dominantUnset: false,
+        thresholdBreach: null,
+      },
+    ];
+    const md = renderBriefMarkdown(brief);
+    expect(md).toMatch(/\| Circlo \| validate \| 60% \| 20% \| 10% \| 10% \| 4 unclassified \|/);
+  });
+
+  it("renders 'unclassified' (not 'meta') for a null jobClassification in Recommended Focus and AI-Proposed Tasks", () => {
+    const brief = fullBrief();
+    brief.recommendedFocus = { ...brief.recommendedFocus!, jobClassification: null };
+    brief.highLeverageActions = [
+      { ...brief.highLeverageActions[0], jobClassification: null },
+    ];
+    const md = renderBriefMarkdown(brief);
+    expect(md).toContain("- Job classification: unclassified");
+    expect(md).toContain("Email cohort A** — (no expected artifact) — L1 — unclassified");
   });
 });
 
