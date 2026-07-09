@@ -20,6 +20,8 @@ export const BRIEF_STORE_STATE_KEY = "brief.v1";
 export const HALLUCINATION_FLAGS_STATE_KEY = "hallucination-flags.v1";
 /** T-3.7 — briefer self-pause flag (instance scope). */
 export const BRIEFER_PAUSED_STATE_KEY = "briefer-paused.v1";
+/** T-3.12 — pause/resume audit trail (instance scope, append-only). */
+export const BRIEFER_PAUSE_AUDIT_STATE_KEY = "briefer-pause-audit.v1";
 /** T-3.9 — captured principal feedback per brief (instance scope, namespace=brief-date). */
 export const BRIEF_FEEDBACK_STATE_KEY = "brief-feedback.v1";
 /** T-3.10 — kill-criterion metrics: single instance-scoped map keyed by briefDate. */

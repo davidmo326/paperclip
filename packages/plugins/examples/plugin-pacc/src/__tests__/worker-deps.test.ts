@@ -121,22 +121,32 @@ describe("makeOverlapStore", () => {
 // ---------------------------------------------------------------------------
 
 describe("makeHallucinationDeps", () => {
-  it("reads/writes the flag counter + pause flag", async () => {
+  it("reads/writes the sighting counter + pause flag", async () => {
     const deps = makeHallucinationDeps(makeCtx(state), new Set(["circlo"]));
     expect(await deps.readFlags()).toBeNull();
-    await deps.writeFlags({ flags: [{ at: "2026-05-22T08:00:00.000Z", briefDate: "2026-05-22", refs: ["x"] }] });
-    expect((await deps.readFlags())?.flags).toHaveLength(1);
+    await deps.writeFlags({
+      sightings: [
+        {
+          at: "2026-05-22T08:00:00.000Z",
+          briefDate: "2026-05-22",
+          ref: "x",
+          rawRef: "x",
+          modelGenerated: true,
+        },
+      ],
+    });
+    expect((await deps.readFlags())?.sightings).toHaveLength(1);
 
     expect(await deps.isPaused()).toEqual({ paused: false, reason: null });
-    await deps.setPaused("3 flags in window");
+    await deps.setPaused("3 unique refs in window");
     const p = await deps.isPaused();
     expect(p.paused).toBe(true);
-    expect(p.reason).toBe("3 flags in window");
+    expect(p.reason).toBe("3 unique refs in window");
   });
 
   it("stores flags under the instance-scoped hallucination key", async () => {
     const deps = makeHallucinationDeps(makeCtx(state), new Set());
-    await deps.writeFlags({ flags: [] });
+    await deps.writeFlags({ sightings: [] });
     const expectedKey = `instance::${PLUGIN_NAMESPACE}:${HALLUCINATION_FLAGS_STATE_KEY}`;
     expect(state.store.has(expectedKey)).toBe(true);
   });

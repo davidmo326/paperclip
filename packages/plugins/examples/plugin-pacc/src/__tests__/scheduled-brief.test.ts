@@ -16,10 +16,15 @@ import {
   BRIEF_GENERATED_EVENT,
   checkMissedRun,
   runScheduledBrief,
+  type HallucinationDeps,
   type ScheduledBriefDeps,
   type KillCriterionDeps,
 } from "../lib/briefer/scheduled-brief.js";
 import type { KillCriterionMetric } from "../lib/briefer/kill-criterion.js";
+import {
+  resumeBriefer,
+  type HallucinationCounterState,
+} from "../lib/briefer/hallucination.js";
 import type {
   Brief,
   BrieferDeps,
@@ -93,6 +98,19 @@ function makeCard(projectId: string): ContextCard {
 
 function projectInput(projectId: string): BrieferProjectInput {
   return { projectId, projectName: `P-${projectId}`, card: makeCard(projectId) };
+}
+
+/** A project card whose next-smallest-action text embeds an arbitrary slug —
+ * used to plant an unknown ID-shaped reference for the hallucination-tripwire
+ * tests (T-3.12 / D-39), since highLeverageActions render unconditionally
+ * regardless of skipModel. */
+function projectInputWithAction(projectId: string, actionText: string): BrieferProjectInput {
+  const card = makeCard(projectId);
+  return {
+    projectId,
+    projectName: `P-${projectId}`,
+    card: { ...card, nextActions: { ...card.nextActions, answer: actionText } },
+  };
 }
 
 interface MockBriefer {
@@ -447,7 +465,138 @@ describe("runScheduledBrief — kill-criterion wiring", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. Sanity: writeFile import is used (vitest pickier without it)
+// 5. Hallucination tripwire — T-3.12 / D-39
+// ---------------------------------------------------------------------------
+
+class InMemoryHallucination implements HallucinationDeps {
+  knownIds: ReadonlySet<string>;
+  counter: HallucinationCounterState | null = null;
+  paused: { paused: boolean; reason: string | null } = { paused: false, reason: null };
+  constructor(knownIds: ReadonlySet<string> = new Set(["p-1", "P-p-1"])) {
+    this.knownIds = knownIds;
+  }
+  async readFlags() {
+    return this.counter;
+  }
+  async writeFlags(state: HallucinationCounterState) {
+    this.counter = state;
+  }
+  async isPaused() {
+    return this.paused;
+  }
+  async setPaused(reason: string) {
+    this.paused = { paused: true, reason };
+  }
+}
+
+describe("runScheduledBrief — hallucination tripwire (D-39)", () => {
+  it("3 flagged deterministic briefs in 24h → zero pause; warning lines present", async () => {
+    const hallucination = new InMemoryHallucination();
+    const refs = ["phantom-ref-1", "phantom-ref-2", "phantom-ref-3"];
+    for (let i = 0; i < 3; i += 1) {
+      state.briefer.projects = [projectInputWithAction("p-1", `Ship ${refs[i]} today`)];
+      const deps: ScheduledBriefDeps = { ...makeDeps(state), hallucination };
+      const result = await runScheduledBrief(deps, {
+        now: new Date(NOW.getTime() + i * 3600_000),
+        runId: `run-det-${i}`,
+        obsidianBaseDir: workdir,
+        brieferOptions: { skipModel: true },
+      });
+      expect(result.kind).toBe("completed");
+      if (result.kind === "completed") {
+        expect(result.selfPaused).toBe(false);
+        const written = await readFile(result.obsidianWrite.path, "utf8");
+        expect(written).toContain(`${refs[i]} _(hallucinated reference)_`);
+      }
+    }
+    expect(hallucination.paused.paused).toBe(false);
+  });
+
+  it("same ref on 3 consecutive model briefs → counts once → no pause", async () => {
+    const hallucination = new InMemoryHallucination();
+    for (let i = 0; i < 3; i += 1) {
+      state.briefer.projects = [projectInputWithAction("p-1", "Ship phantom-ref-shared today")];
+      const deps: ScheduledBriefDeps = { ...makeDeps(state), hallucination };
+      const result = await runScheduledBrief(deps, {
+        now: new Date(NOW.getTime() + i * 3600_000),
+        runId: `run-model-same-${i}`,
+        obsidianBaseDir: workdir,
+        brieferOptions: { skipModel: false },
+      });
+      expect(result.kind).toBe("completed");
+      if (result.kind === "completed") expect(result.selfPaused).toBe(false);
+    }
+    expect(hallucination.paused.paused).toBe(false);
+  });
+
+  it("3 unique refs on model briefs in 24h → pause fires", async () => {
+    const hallucination = new InMemoryHallucination();
+    const refs = ["phantom-a", "phantom-b", "phantom-c"];
+    let lastResult: Awaited<ReturnType<typeof runScheduledBrief>> | undefined;
+    for (let i = 0; i < 3; i += 1) {
+      state.briefer.projects = [projectInputWithAction("p-1", `Ship ${refs[i]} today`)];
+      const deps: ScheduledBriefDeps = { ...makeDeps(state), hallucination };
+      lastResult = await runScheduledBrief(deps, {
+        now: new Date(NOW.getTime() + i * 3600_000),
+        runId: `run-model-unique-${i}`,
+        obsidianBaseDir: workdir,
+        brieferOptions: { skipModel: false },
+      });
+    }
+    expect(lastResult?.kind).toBe("completed");
+    if (lastResult?.kind === "completed") expect(lastResult.selfPaused).toBe(true);
+    expect(hallucination.paused.paused).toBe(true);
+  });
+
+  it("round-trip: pause → resume-briefer → next scheduled run produces a real brief", async () => {
+    const hallucination = new InMemoryHallucination();
+    const refs = ["phantom-x", "phantom-y", "phantom-z"];
+    for (let i = 0; i < 3; i += 1) {
+      state.briefer.projects = [projectInputWithAction("p-1", `Ship ${refs[i]} today`)];
+      const deps: ScheduledBriefDeps = { ...makeDeps(state), hallucination };
+      await runScheduledBrief(deps, {
+        now: new Date(NOW.getTime() + i * 3600_000),
+        runId: `run-rt-${i}`,
+        obsidianBaseDir: workdir,
+        brieferOptions: { skipModel: false },
+      });
+    }
+    expect(hallucination.paused.paused).toBe(true);
+
+    // Next tick while still paused writes the stub, not a real brief.
+    const stillPaused = await runScheduledBrief(
+      { ...makeDeps(state), hallucination },
+      {
+        now: new Date(NOW.getTime() + 4 * 3600_000),
+        runId: "run-rt-stub",
+        obsidianBaseDir: workdir,
+      },
+    );
+    expect(stillPaused.kind).toBe("skipped_paused");
+
+    // `pacc resume-briefer` — clears the pause (mirrors resumeBrieferAction's
+    // pure decision step; the plugin_state write is the adapter's job).
+    const resumeResult = resumeBriefer({ pauseState: hallucination.paused, actor: "principal", now: NOW });
+    expect(resumeResult.kind).toBe("resumed");
+    hallucination.paused = { paused: false, reason: null };
+
+    // The next scheduled run produces a real brief again.
+    state.briefer.projects = [projectInput("p-1")];
+    const resumed = await runScheduledBrief(
+      { ...makeDeps(state), hallucination },
+      {
+        now: new Date(NOW.getTime() + 5 * 3600_000),
+        runId: "run-rt-resumed",
+        obsidianBaseDir: workdir,
+        brieferOptions: { skipModel: true },
+      },
+    );
+    expect(resumed.kind).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Sanity: writeFile import is used (vitest pickier without it)
 // ---------------------------------------------------------------------------
 
 describe("imports", () => {

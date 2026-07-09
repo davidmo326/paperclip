@@ -28,6 +28,8 @@ import {
   makeScheduledBriefDeps,
   makeCaptureFeedbackDeps,
   assembleProjectCards,
+  resumeBrieferAction,
+  readHallucinationAuditWindow,
 } from "./lib/briefer/worker-deps.js";
 import { captureBriefFeedback } from "./lib/briefer/capture-feedback.js";
 import { makeDecisionDeps } from "./lib/decisions/decision-deps.js";
@@ -663,6 +665,23 @@ const plugin: PaperclipPlugin = definePlugin({
         hallucinationFlagCount: result.kind === "completed" ? result.hallucinationFlagCount : 0,
         selfPaused: result.kind === "completed" ? result.selfPaused : result.kind === "skipped_paused",
       };
+    });
+
+    // T-3.12 (D-39): clear the hallucination self-pause flag. Errors clearly
+    // if no pause is active; writes a `principal`-attributed audit row.
+    ctx.actions.register("resume-briefer", async (params) => {
+      const actor = typeof params.actor === "string" && params.actor ? params.actor : "principal";
+      const result = await resumeBrieferAction(ctx, actor, new Date());
+      if (result.kind === "not_paused") {
+        throw new Error("briefer is not paused — nothing to resume");
+      }
+      return { resumed: true, auditRow: result.auditRow };
+    });
+
+    // T-3.12 (D-39): the current 24h hallucination-flag window, one row per
+    // unique normalized reference (not per flagged run).
+    ctx.data.register("hallucination-audit", async () => {
+      return await readHallucinationAuditWindow(ctx, new Date());
     });
 
     // T-4.4: record a decision (append-only; supersede marks the prior).

@@ -32,12 +32,15 @@ import {
 } from "./overlap-guard.js";
 import {
   annotateHallucinations,
-  appendFlag,
+  appendSightings,
+  countUniqueModelRefs,
   detectHallucinations,
+  normalizeReference,
   pausedBriefMarkdown,
-  pruneOldFlags,
+  pruneOldSightings,
   shouldPause,
   type HallucinationCounterState,
+  type HallucinationSighting,
 } from "./hallucination.js";
 import {
   initMetric,
@@ -269,11 +272,15 @@ export async function runScheduledBrief(
     // 3. Render to Markdown.
     let markdown = renderBriefMarkdown(brief, selfCheck ? { selfCheck } : {});
 
-    // 3b. Hallucination tripwire (T-3.7): scan rendered Markdown for
-    //     unknown ID references, annotate + record flags + maybe self-pause.
+    // 3b. Hallucination tripwire (T-3.7, D-39 fix T-3.12): scan rendered
+    //     Markdown for unknown ID references, annotate (always — deterministic
+    //     or model-generated, both get the inline warning), record sightings
+    //     for audit, and self-pause only when the flagged brief was
+    //     model-generated AND the unique-reference threshold is met.
     let hallucinationFlagCount = 0;
     let selfPaused = false;
     if (deps.hallucination) {
+      const modelGenerated = !(options.brieferOptions?.skipModel ?? false);
       const flags = detectHallucinations({
         briefMarkdown: markdown,
         knownIds: deps.hallucination.knownIds,
@@ -281,39 +288,55 @@ export async function runScheduledBrief(
       hallucinationFlagCount = flags.length;
       if (flags.length > 0) {
         markdown = annotateHallucinations(markdown, flags);
-        // Emit one event per flagged reference.
+        // Emit one event per flagged reference (both origins — audit trail).
         for (const flag of flags) {
           await deps.emitEvent(HALLUCINATION_FLAG_EVENT, {
             briefDate: brief.briefDate,
             reference: flag.reference,
             kind: flag.kind,
             excerpt: flag.excerpt,
+            modelGenerated,
             runId: options.runId ?? null,
           });
         }
-        // Record + evaluate the rolling-window counter.
+        if (!modelGenerated) {
+          deps.logger.warn(
+            "scheduled brief: hallucination flags on a deterministic/offline brief — warning only, never pauses (D-39)",
+            { runId: options.runId, flagCount: flags.length },
+          );
+        }
+
+        // Record sightings (unique-ref dedup happens at read time, not here —
+        // each occurrence is stored so audit can show first-seen accurately).
+        const newSightings: HallucinationSighting[] = flags.map((flag) => ({
+          at: now.toISOString(),
+          briefDate: brief.briefDate,
+          ref: normalizeReference(flag.reference),
+          rawRef: flag.reference,
+          modelGenerated,
+        }));
         const prior = await deps.hallucination.readFlags();
-        const updated = appendFlag(
-          prior,
-          { at: now.toISOString(), briefDate: brief.briefDate, refs: flags.map((f) => f.reference) },
-          now,
-          deps.hallucination.windowMs,
-        );
+        const updated = appendSightings(prior, newSightings, now, deps.hallucination.windowMs);
         await deps.hallucination.writeFlags(updated);
-        const inWindow = pruneOldFlags(updated, now, deps.hallucination.windowMs);
-        if (shouldPause(inWindow, deps.hallucination.pauseThreshold)) {
-          selfPaused = true;
-          const reason = `${inWindow.length} hallucination flags within window`;
-          await deps.hallucination.setPaused(reason);
-          await deps.emitEvent(SELF_PAUSED_EVENT, {
-            reason,
-            flagCount: inWindow.length,
-            runId: options.runId ?? null,
-          });
-          deps.logger.warn("scheduled brief: self-paused on hallucination threshold", {
-            runId: options.runId,
-            flagCount: inWindow.length,
-          });
+
+        // Self-pause only ever considers model-generated sightings (D-39).
+        if (modelGenerated) {
+          const inWindow = pruneOldSightings(updated, now, deps.hallucination.windowMs);
+          if (shouldPause(inWindow, deps.hallucination.pauseThreshold)) {
+            selfPaused = true;
+            const uniqueCount = countUniqueModelRefs(inWindow);
+            const reason = `${uniqueCount} unique hallucinated reference(s) within window`;
+            await deps.hallucination.setPaused(reason);
+            await deps.emitEvent(SELF_PAUSED_EVENT, {
+              reason,
+              uniqueRefCount: uniqueCount,
+              runId: options.runId ?? null,
+            });
+            deps.logger.warn("scheduled brief: self-paused on hallucination threshold", {
+              runId: options.runId,
+              uniqueRefCount: uniqueCount,
+            });
+          }
         }
       }
     }

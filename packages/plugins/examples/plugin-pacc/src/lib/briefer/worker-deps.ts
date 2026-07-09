@@ -30,6 +30,7 @@
 
 import {
   BRIEFER_PAUSED_STATE_KEY,
+  BRIEFER_PAUSE_AUDIT_STATE_KEY,
   BRIEF_FEEDBACK_STATE_KEY,
   BRIEF_STORE_STATE_KEY,
   CONFLICTS_STATE_KEY,
@@ -46,8 +47,14 @@ import type { ProjectDecayRecord } from "../../jobs/source-decay-check.js";
 import type { ProjectConflictsState } from "../conflict.js";
 import type { Brief, BrieferDeps, BrieferProjectInput } from "./types.js";
 import type { OverlapGuardStore, BriefInProgressLock } from "./overlap-guard.js";
-import type {
-  HallucinationCounterState,
+import {
+  auditRowsFromSightings,
+  pruneOldSightings,
+  resumeBriefer,
+  type HallucinationAuditRow,
+  type HallucinationCounterState,
+  type PauseAuditRow,
+  type ResumeBrieferResult,
 } from "./hallucination.js";
 import type {
   HallucinationDeps,
@@ -166,6 +173,53 @@ export function makeHallucinationDeps(
       });
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Resume path + hallucination audit (T-3.12 / D-39)
+// ---------------------------------------------------------------------------
+
+/**
+ * `pacc resume-briefer`: clears the self-pause flag if one is active and
+ * appends a `principal`-attributed audit row. Returns `not_paused` (caller
+ * surfaces a clear CLI error) if there was nothing to resume.
+ */
+export async function resumeBrieferAction(
+  ctx: WorkerCtx,
+  actor: string,
+  now: Date = new Date(),
+): Promise<ResumeBrieferResult> {
+  const pauseState = (await ctx.state.get(instanceKey(BRIEFER_PAUSED_STATE_KEY))) as
+    | { paused: boolean; reason: string | null }
+    | null;
+  const result = resumeBriefer({ pauseState, actor, now });
+  if (result.kind === "resumed") {
+    if (ctx.state.delete) {
+      await ctx.state.delete(instanceKey(BRIEFER_PAUSED_STATE_KEY));
+    } else {
+      await ctx.state.set(instanceKey(BRIEFER_PAUSED_STATE_KEY), null);
+    }
+    const priorAudit =
+      ((await ctx.state.get(instanceKey(BRIEFER_PAUSE_AUDIT_STATE_KEY))) as PauseAuditRow[] | null) ?? [];
+    await ctx.state.set(instanceKey(BRIEFER_PAUSE_AUDIT_STATE_KEY), [...priorAudit, result.auditRow]);
+  }
+  return result;
+}
+
+/**
+ * `pacc audit hallucinations`: the current 24h window of unique-reference
+ * sightings (normalized ref, first-seen timestamp, brief id, origin).
+ */
+export async function readHallucinationAuditWindow(
+  ctx: WorkerCtx,
+  now: Date = new Date(),
+  windowMs?: number,
+): Promise<HallucinationAuditRow[]> {
+  const state = (await ctx.state.get(
+    instanceKey(HALLUCINATION_FLAGS_STATE_KEY),
+  )) as HallucinationCounterState | null;
+  const inWindow = pruneOldSightings(state, now, windowMs);
+  return auditRowsFromSightings(inWindow);
 }
 
 // ---------------------------------------------------------------------------

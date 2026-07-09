@@ -1,14 +1,24 @@
 /**
  * Hallucination tripwire — T-3.7 / PRD § 15.2 tripwire 5.
+ * D-39 fix (T-3.12): pause scope + unique-reference counting.
  *
  * Scans rendered brief Markdown for ID-shaped tokens, validates each
  * against the set of known canonical IDs (project slugs + decision/task
  * UUIDs the briefer was given), and flags anything that doesn't match.
  *
- * Counts flags over a rolling 24h window (NOT calendar day — midnight
- * rollover must not reset). At ≥ 3 flags within the window, the briefer
- * self-pauses by writing a plugin_state flag; the scheduled-brief
- * orchestrator checks this before each run.
+ * Counts **unique normalized references** over a rolling 24h window (NOT
+ * calendar day — midnight rollover must not reset; NOT flagged runs — the
+ * same false-positive token repeating across runs counts once). At ≥ 3
+ * unique references within the window, the briefer self-pauses by writing
+ * a plugin_state flag; the scheduled-brief orchestrator checks this before
+ * each run.
+ *
+ * D-39: the self-pause fires **only** when the flagged brief was
+ * model-generated (`skipModel === false`). Flags raised on
+ * deterministic/offline briefs are detector/pipeline bugs, not evidence of
+ * model hallucination — they render a warning line + an audit row, and
+ * never pause. Deterministic sightings are still recorded (for
+ * `pacc audit hallucinations`) but excluded from the pause count.
  *
  * Pure logic only. Caller plumbs the plugin_state read/write via the
  * `HallucinationFlagStore` and `PauseStore` interfaces.
@@ -187,64 +197,183 @@ export function annotateHallucinations(
 }
 
 // ---------------------------------------------------------------------------
-// Rolling 24h counter
+// Reference normalization (D-39)
 // ---------------------------------------------------------------------------
 
-export interface HallucinationFlagRecord {
-  /** ISO-8601 timestamp. */
+/** Trailing punctuation commonly attached to a reference inside prose. */
+const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
+
+/**
+ * Normalize a reference for dedup purposes: trim, lowercase, strip trailing
+ * punctuation. Two mentions of the same token that differ only in case or a
+ * trailing period/comma count as the same unique reference (D-39).
+ */
+export function normalizeReference(raw: string): string {
+  return raw.trim().toLowerCase().replace(TRAILING_PUNCT, "");
+}
+
+// ---------------------------------------------------------------------------
+// Rolling 24h counter — unique references (D-39)
+// ---------------------------------------------------------------------------
+
+/** One detected reference, recorded once per (run, reference) pair. */
+export interface HallucinationSighting {
+  /** ISO-8601 timestamp of the run that produced this sighting. */
   at: string;
   /** YYYY-MM-DD of the brief this came from. */
   briefDate: string;
-  /** Verbatim references that triggered this flag (1+ per call). */
-  refs: string[];
+  /** Normalized reference (trim/lowercase/strip trailing punctuation) — the dedup key. */
+  ref: string;
+  /** Verbatim token as it appeared in the brief (for display/audit). */
+  rawRef: string;
+  /**
+   * Whether the originating brief was model-generated (`skipModel === false`).
+   * Deterministic/offline sightings are recorded for audit but never count
+   * toward the self-pause threshold (D-39).
+   */
+  modelGenerated: boolean;
 }
 
 export interface HallucinationCounterState {
-  flags: HallucinationFlagRecord[];
+  sightings: HallucinationSighting[];
 }
 
 /** Default window — PRD § 15.2 tripwire 5. */
 export const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
-/** Default threshold — 3 flags in window triggers self-pause. */
+/** Default threshold — 3 unique references in window triggers self-pause. */
 export const DEFAULT_PAUSE_THRESHOLD = 3;
 
-/** Return only the flags that fall within `windowMs` of `now` (inclusive). */
-export function pruneOldFlags(
+/** Return only the sightings that fall within `windowMs` of `now` (inclusive). */
+export function pruneOldSightings(
   state: HallucinationCounterState | null | undefined,
   now: Date,
   windowMs: number = DEFAULT_WINDOW_MS,
-): HallucinationFlagRecord[] {
-  if (!state?.flags) return [];
+): HallucinationSighting[] {
+  if (!state?.sightings) return [];
   const cutoffMs = now.getTime() - windowMs;
-  return state.flags.filter((f) => {
-    const t = Date.parse(f.at);
+  return state.sightings.filter((s) => {
+    const t = Date.parse(s.at);
     return Number.isFinite(t) && t >= cutoffMs;
   });
 }
 
 /**
- * Decide whether the briefer should self-pause based on the count of
- * flags in the rolling window. `flags` is expected to already be pruned.
+ * Count of unique normalized references among **model-generated** sightings
+ * only. Deterministic/offline sightings never contribute (D-39).
  */
-export function shouldPause(
-  flagsInWindow: readonly HallucinationFlagRecord[],
-  threshold: number = DEFAULT_PAUSE_THRESHOLD,
-): boolean {
-  return flagsInWindow.length >= threshold;
+export function countUniqueModelRefs(
+  sightings: readonly HallucinationSighting[],
+): number {
+  const set = new Set(
+    sightings.filter((s) => s.modelGenerated).map((s) => s.ref),
+  );
+  return set.size;
 }
 
 /**
- * Append a new flag-record to existing state (after pruning). Returns the
- * full updated state for the caller to persist.
+ * Decide whether the briefer should self-pause based on the count of
+ * **unique model-generated** references in the rolling window. `sightings`
+ * is expected to already be pruned to the window.
  */
-export function appendFlag(
+export function shouldPause(
+  sightingsInWindow: readonly HallucinationSighting[],
+  threshold: number = DEFAULT_PAUSE_THRESHOLD,
+): boolean {
+  return countUniqueModelRefs(sightingsInWindow) >= threshold;
+}
+
+/**
+ * Append new sightings to existing state (after pruning). Returns the full
+ * updated state for the caller to persist.
+ */
+export function appendSightings(
   state: HallucinationCounterState | null | undefined,
-  newFlag: HallucinationFlagRecord,
+  newSightings: readonly HallucinationSighting[],
   now: Date = new Date(),
   windowMs: number = DEFAULT_WINDOW_MS,
 ): HallucinationCounterState {
-  const pruned = pruneOldFlags(state, now, windowMs);
-  return { flags: [...pruned, newFlag] };
+  const pruned = pruneOldSightings(state, now, windowMs);
+  return { sightings: [...pruned, ...newSightings] };
+}
+
+// ---------------------------------------------------------------------------
+// Audit rows — `pacc audit hallucinations` (T-3.12)
+// ---------------------------------------------------------------------------
+
+export interface HallucinationAuditRow {
+  /** Normalized reference. */
+  ref: string;
+  /** ISO-8601 timestamp of the earliest sighting of this ref in the window. */
+  firstSeenAt: string;
+  /** Brief date the first sighting came from. */
+  briefDate: string;
+  /** Origin of the first sighting: model-generated or deterministic/offline. */
+  modelGenerated: boolean;
+}
+
+/**
+ * Reduce a window of sightings to one audit row per unique reference,
+ * keyed on first-seen order. Multiple runs re-mentioning the same reference
+ * collapse to a single row (D-39: counts unique references, not runs).
+ */
+export function auditRowsFromSightings(
+  sightingsInWindow: readonly HallucinationSighting[],
+): HallucinationAuditRow[] {
+  const sorted = [...sightingsInWindow].sort(
+    (a, b) => Date.parse(a.at) - Date.parse(b.at),
+  );
+  const byRef = new Map<string, HallucinationAuditRow>();
+  for (const s of sorted) {
+    if (byRef.has(s.ref)) continue;
+    byRef.set(s.ref, {
+      ref: s.ref,
+      firstSeenAt: s.at,
+      briefDate: s.briefDate,
+      modelGenerated: s.modelGenerated,
+    });
+  }
+  return [...byRef.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Resume path (T-3.12) — `pacc resume-briefer`
+// ---------------------------------------------------------------------------
+
+export interface PauseAuditRow {
+  /** ISO-8601 timestamp. */
+  at: string;
+  /** Who cleared the pause. Always `principal` for the CLI path. */
+  actor: string;
+  /** The reason the pause carried at the moment it was cleared. */
+  clearedReason: string | null;
+}
+
+export interface ResumeBrieferInput {
+  pauseState: { paused: boolean; reason: string | null } | null;
+  actor: string;
+  now: Date;
+}
+
+export type ResumeBrieferResult =
+  | { kind: "resumed"; auditRow: PauseAuditRow }
+  | { kind: "not_paused" };
+
+/**
+ * Pure decision logic for `pacc resume-briefer`: clears the pause only if
+ * one is active, and always produces an audit row when it does. Errors
+ * clearly (via the `not_paused` result) when there is nothing to resume —
+ * the caller surfaces this as a CLI error.
+ */
+export function resumeBriefer(input: ResumeBrieferInput): ResumeBrieferResult {
+  if (!input.pauseState?.paused) return { kind: "not_paused" };
+  return {
+    kind: "resumed",
+    auditRow: {
+      at: input.now.toISOString(),
+      actor: input.actor,
+      clearedReason: input.pauseState.reason,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

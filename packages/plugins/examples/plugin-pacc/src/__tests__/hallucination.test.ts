@@ -1,12 +1,16 @@
 /**
- * T-3.7 — hallucination tripwire tests.
+ * T-3.7 — hallucination tripwire tests. T-3.12 — D-39 fix (pause scope +
+ * unique-reference counting) + resume path.
  *
- * Five layers:
+ * Layers:
  *   1. extractIdLikeTokens (UUID / slug detection)
  *   2. detectHallucinations (known-list matching + allow-list)
  *   3. annotateHallucinations (Markdown insertion)
- *   4. pruneOldFlags + shouldPause (rolling 24h counter)
- *   5. pausedBriefMarkdown (stub output)
+ *   4. normalizeReference (D-39 dedup key)
+ *   5. pruneOldSightings + shouldPause + countUniqueModelRefs (rolling 24h, unique refs, model-only pause)
+ *   6. auditRowsFromSightings (`pacc audit hallucinations`)
+ *   7. resumeBriefer (`pacc resume-briefer`)
+ *   8. pausedBriefMarkdown (stub output)
  */
 
 import { describe, expect, it } from "vitest";
@@ -14,14 +18,18 @@ import {
   DEFAULT_PAUSE_THRESHOLD,
   DEFAULT_WINDOW_MS,
   annotateHallucinations,
-  appendFlag,
+  appendSightings,
+  auditRowsFromSightings,
+  countUniqueModelRefs,
   detectHallucinations,
   extractIdLikeTokens,
+  normalizeReference,
   pausedBriefMarkdown,
-  pruneOldFlags,
+  pruneOldSightings,
+  resumeBriefer,
   shouldPause,
   type HallucinationCounterState,
-  type HallucinationFlagRecord,
+  type HallucinationSighting,
 } from "../lib/briefer/hallucination.js";
 
 // ---------------------------------------------------------------------------
@@ -169,156 +177,283 @@ describe("annotateHallucinations", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. Rolling 24h counter
+// 4. normalizeReference (D-39)
 // ---------------------------------------------------------------------------
 
-describe("pruneOldFlags + shouldPause — rolling 24h", () => {
+describe("normalizeReference — D-39 dedup key", () => {
+  it("trims, lowercases, and strips trailing punctuation", () => {
+    expect(normalizeReference("  Phantom-Slug.  ")).toBe("phantom-slug");
+    expect(normalizeReference("phantom-slug,")).toBe("phantom-slug");
+    expect(normalizeReference("PHANTOM-SLUG")).toBe("phantom-slug");
+  });
+
+  it("treats differently-punctuated mentions as the same reference", () => {
+    expect(normalizeReference("phantom-slug.")).toBe(normalizeReference("phantom-slug"));
+    expect(normalizeReference("Phantom-Slug,")).toBe(normalizeReference("phantom-slug"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Rolling 24h counter — unique references (D-39)
+// ---------------------------------------------------------------------------
+
+describe("pruneOldSightings + shouldPause — rolling 24h, unique refs", () => {
   const NOW = new Date("2026-05-22T08:00:00.000Z");
 
-  function flagAt(hoursAgo: number, refs: string[] = ["x"]): HallucinationFlagRecord {
+  function sightingAt(
+    hoursAgo: number,
+    ref: string,
+    modelGenerated = true,
+  ): HallucinationSighting {
     return {
       at: new Date(NOW.getTime() - hoursAgo * 3600_000).toISOString(),
       briefDate: "2026-05-22",
-      refs,
+      ref,
+      rawRef: ref,
+      modelGenerated,
     };
   }
 
-  it("keeps flags within the 24h window, drops older ones", () => {
+  it("keeps sightings within the 24h window, drops older ones", () => {
     const state: HallucinationCounterState = {
-      flags: [
-        flagAt(0.5, ["a"]),
-        flagAt(12, ["b"]),
-        flagAt(23, ["c"]), // boundary-ish, still inside
-        flagAt(25, ["d"]), // outside
-        flagAt(48, ["e"]), // way outside
+      sightings: [
+        sightingAt(0.5, "a"),
+        sightingAt(12, "b"),
+        sightingAt(23, "c"), // boundary-ish, still inside
+        sightingAt(25, "d"), // outside
+        sightingAt(48, "e"), // way outside
       ],
     };
-    const kept = pruneOldFlags(state, NOW);
-    expect(kept.map((f) => f.refs[0]).sort()).toEqual(["a", "b", "c"]);
+    const kept = pruneOldSightings(state, NOW);
+    expect(kept.map((s) => s.ref).sort()).toEqual(["a", "b", "c"]);
   });
 
-  it("keeps a flag at exactly 24h ago (boundary inclusive)", () => {
-    const state: HallucinationCounterState = {
-      flags: [flagAt(24, ["x"])], // exactly at boundary
-    };
-    const kept = pruneOldFlags(state, NOW);
-    expect(kept).toHaveLength(1);
+  it("keeps a sighting at exactly 24h ago (boundary inclusive)", () => {
+    const state: HallucinationCounterState = { sightings: [sightingAt(24, "x")] };
+    expect(pruneOldSightings(state, NOW)).toHaveLength(1);
   });
 
-  it("drops flags > 24h ago", () => {
-    const state: HallucinationCounterState = {
-      flags: [flagAt(24.001, ["x"])],
-    };
-    expect(pruneOldFlags(state, NOW)).toEqual([]);
+  it("drops sightings > 24h ago", () => {
+    const state: HallucinationCounterState = { sightings: [sightingAt(24.001, "x")] };
+    expect(pruneOldSightings(state, NOW)).toEqual([]);
   });
 
   it("returns [] for null/undefined state", () => {
-    expect(pruneOldFlags(null, NOW)).toEqual([]);
-    expect(pruneOldFlags(undefined, NOW)).toEqual([]);
+    expect(pruneOldSightings(null, NOW)).toEqual([]);
+    expect(pruneOldSightings(undefined, NOW)).toEqual([]);
   });
 
-  it("ignores flags with un-parseable timestamps", () => {
+  it("ignores sightings with un-parseable timestamps", () => {
     const state: HallucinationCounterState = {
-      flags: [
-        flagAt(1, ["a"]),
-        { at: "not-a-date", briefDate: "2026-05-22", refs: ["x"] },
+      sightings: [
+        sightingAt(1, "a"),
+        { at: "not-a-date", briefDate: "2026-05-22", ref: "x", rawRef: "x", modelGenerated: true },
       ],
     };
-    expect(pruneOldFlags(state, NOW)).toHaveLength(1);
+    expect(pruneOldSightings(state, NOW)).toHaveLength(1);
   });
 
   it("respects a custom windowMs", () => {
-    const state: HallucinationCounterState = {
-      flags: [flagAt(2, ["x"])],
-    };
-    // 1h window — the 2h-old flag drops
-    expect(pruneOldFlags(state, NOW, 1 * 3600_000)).toEqual([]);
+    const state: HallucinationCounterState = { sightings: [sightingAt(2, "x")] };
+    // 1h window — the 2h-old sighting drops
+    expect(pruneOldSightings(state, NOW, 1 * 3600_000)).toEqual([]);
+  });
+
+  // ---- countUniqueModelRefs ----
+
+  it("counts each unique ref once even if it repeats across runs", () => {
+    // Same ref on 3 consecutive model briefs — counts once (D-39 acceptance).
+    expect(countUniqueModelRefs([sightingAt(2, "x"), sightingAt(1, "x"), sightingAt(0, "x")])).toBe(1);
+  });
+
+  it("excludes deterministic/offline sightings from the count", () => {
+    expect(
+      countUniqueModelRefs([
+        sightingAt(2, "a", false),
+        sightingAt(1, "b", false),
+        sightingAt(0, "c", false),
+      ]),
+    ).toBe(0);
+  });
+
+  it("counts unique refs across mixed origins, deterministic excluded", () => {
+    expect(
+      countUniqueModelRefs([sightingAt(2, "a", true), sightingAt(1, "b", false), sightingAt(0, "c", true)]),
+    ).toBe(2);
   });
 
   // ---- shouldPause ----
 
-  it("shouldPause: false when < threshold flags in window", () => {
-    expect(shouldPause([flagAt(1), flagAt(2)])).toBe(false); // 2 < 3
+  it("shouldPause: false when < threshold unique model refs in window", () => {
+    expect(shouldPause([sightingAt(1, "a"), sightingAt(2, "b")])).toBe(false); // 2 < 3
   });
 
-  it("shouldPause: true when exactly threshold flags in window", () => {
-    expect(shouldPause([flagAt(1), flagAt(2), flagAt(3)])).toBe(true);
+  it("shouldPause: true when exactly threshold unique model refs in window", () => {
+    expect(shouldPause([sightingAt(1, "a"), sightingAt(2, "b"), sightingAt(3, "c")])).toBe(true);
   });
 
   it("shouldPause: true when > threshold", () => {
-    expect(shouldPause([flagAt(1), flagAt(2), flagAt(3), flagAt(4)])).toBe(true);
+    expect(
+      shouldPause([sightingAt(1, "a"), sightingAt(2, "b"), sightingAt(3, "c"), sightingAt(4, "d")]),
+    ).toBe(true);
   });
 
   it("respects a custom threshold", () => {
-    expect(shouldPause([flagAt(1)], 1)).toBe(true);
+    expect(shouldPause([sightingAt(1, "a")], 1)).toBe(true);
     expect(shouldPause([], 1)).toBe(false);
   });
 
-  // ---- The PRD-specified scenario ----
+  // ---- D-39 acceptance scenarios ----
 
-  it("PRD acceptance: 2 flags at hour 0, 1 flag at hour 23 → pause fires", () => {
+  it("D-39: 3 flagged deterministic briefs in 24h → zero pause", () => {
+    const sightings = [sightingAt(2, "a", false), sightingAt(1, "b", false), sightingAt(0, "c", false)];
+    expect(shouldPause(sightings)).toBe(false);
+  });
+
+  it("D-39: same ref on 3 consecutive model briefs → counts once → no pause", () => {
+    const sightings = [sightingAt(2, "phantom-slug"), sightingAt(1, "phantom-slug"), sightingAt(0, "phantom-slug")];
+    expect(countUniqueModelRefs(sightings)).toBe(1);
+    expect(shouldPause(sightings)).toBe(false);
+  });
+
+  it("D-39: 3 unique refs on model briefs in 24h → pause fires", () => {
+    const sightings = [sightingAt(2, "a"), sightingAt(1, "b"), sightingAt(0, "c")];
+    expect(countUniqueModelRefs(sightings)).toBe(3);
+    expect(shouldPause(sightings)).toBe(true);
+  });
+
+  it("PRD acceptance: 2 unique refs at hour 0, 1 at hour 23 → pause fires (rolling window)", () => {
     const state: HallucinationCounterState = {
-      flags: [
-        flagAt(0, ["a"]),
-        flagAt(0, ["b"]),
-        flagAt(23, ["c"]), // 23h ago — still inside 24h window
-      ],
+      sightings: [sightingAt(0, "a"), sightingAt(0, "b"), sightingAt(23, "c")],
     };
-    const kept = pruneOldFlags(state, NOW);
+    const kept = pruneOldSightings(state, NOW);
     expect(kept).toHaveLength(3);
     expect(shouldPause(kept)).toBe(true);
   });
 
   it("does NOT fire when a calendar-day rollover would have reset the counter", () => {
-    // Simulate: 2 flags at hour 0, 1 flag at hour 23 — across UTC midnight.
-    // Naive calendar-day counter would only see today's flag (1 < 3).
+    // Simulate: 2 unique refs at hour 0, 1 at hour 23 — across UTC midnight.
+    // Naive calendar-day counter would only see today's ref (1 < 3).
     // Rolling 24h correctly sees all 3.
     const justAfterMidnight = new Date("2026-05-22T00:30:00.000Z");
     const state: HallucinationCounterState = {
-      flags: [
+      sightings: [
         {
           at: new Date(justAfterMidnight.getTime() - 23 * 3600_000).toISOString(),
           briefDate: "2026-05-21",
-          refs: ["a"],
+          ref: "a",
+          rawRef: "a",
+          modelGenerated: true,
         },
         {
           at: new Date(justAfterMidnight.getTime() - 23 * 3600_000).toISOString(),
           briefDate: "2026-05-21",
-          refs: ["b"],
+          ref: "b",
+          rawRef: "b",
+          modelGenerated: true,
         },
         {
           at: new Date(justAfterMidnight.getTime() - 0.25 * 3600_000).toISOString(),
           briefDate: "2026-05-22",
-          refs: ["c"],
+          ref: "c",
+          rawRef: "c",
+          modelGenerated: true,
         },
       ],
     };
-    const kept = pruneOldFlags(state, justAfterMidnight);
+    const kept = pruneOldSightings(state, justAfterMidnight);
     expect(kept).toHaveLength(3);
     expect(shouldPause(kept)).toBe(true);
   });
 
-  // ---- appendFlag ----
+  // ---- appendSightings ----
 
-  it("appendFlag prunes + appends in one step", () => {
+  it("appendSightings prunes + appends in one step", () => {
     const state: HallucinationCounterState = {
-      flags: [
-        flagAt(25, ["old"]), // gets pruned
-        flagAt(2, ["fresh"]),
-      ],
+      sightings: [sightingAt(25, "old"), sightingAt(2, "fresh")],
     };
-    const updated = appendFlag(state, flagAt(0, ["new"]), NOW);
-    expect(updated.flags.map((f) => f.refs[0])).toEqual(["fresh", "new"]);
+    const updated = appendSightings(state, [sightingAt(0, "new")], NOW);
+    expect(updated.sightings.map((s) => s.ref)).toEqual(["fresh", "new"]);
   });
 
-  it("appendFlag handles null initial state", () => {
-    const updated = appendFlag(null, flagAt(0, ["new"]), NOW);
-    expect(updated.flags).toHaveLength(1);
+  it("appendSightings handles null initial state", () => {
+    const updated = appendSightings(null, [sightingAt(0, "new")], NOW);
+    expect(updated.sightings).toHaveLength(1);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 5. pausedBriefMarkdown
+// 6. auditRowsFromSightings — `pacc audit hallucinations`
+// ---------------------------------------------------------------------------
+
+describe("auditRowsFromSightings", () => {
+  it("collapses repeated refs to one row keyed on first-seen", () => {
+    const rows = auditRowsFromSightings([
+      { at: "2026-05-22T01:00:00.000Z", briefDate: "2026-05-22", ref: "a", rawRef: "A.", modelGenerated: true },
+      { at: "2026-05-22T03:00:00.000Z", briefDate: "2026-05-22", ref: "a", rawRef: "a", modelGenerated: true },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ ref: "a", firstSeenAt: "2026-05-22T01:00:00.000Z", briefDate: "2026-05-22" });
+  });
+
+  it("preserves origin (model vs deterministic) per row", () => {
+    const rows = auditRowsFromSightings([
+      { at: "2026-05-22T01:00:00.000Z", briefDate: "2026-05-22", ref: "a", rawRef: "a", modelGenerated: true },
+      { at: "2026-05-22T02:00:00.000Z", briefDate: "2026-05-22", ref: "b", rawRef: "b", modelGenerated: false },
+    ]);
+    expect(rows.find((r) => r.ref === "a")?.modelGenerated).toBe(true);
+    expect(rows.find((r) => r.ref === "b")?.modelGenerated).toBe(false);
+  });
+
+  it("returns [] for an empty window", () => {
+    expect(auditRowsFromSightings([])).toEqual([]);
+  });
+
+  it("matches a fixture window", () => {
+    const rows = auditRowsFromSightings([
+      { at: "2026-05-22T06:00:00.000Z", briefDate: "2026-05-22", ref: "co-reader-x", rawRef: "co-reader-x", modelGenerated: true },
+      { at: "2026-05-22T07:00:00.000Z", briefDate: "2026-05-22", ref: "phantom-decision", rawRef: "phantom-decision.", modelGenerated: true },
+      { at: "2026-05-21T09:00:00.000Z", briefDate: "2026-05-21", ref: "offline-glitch", rawRef: "offline-glitch", modelGenerated: false },
+    ]);
+    expect(rows).toEqual([
+      { ref: "offline-glitch", firstSeenAt: "2026-05-21T09:00:00.000Z", briefDate: "2026-05-21", modelGenerated: false },
+      { ref: "co-reader-x", firstSeenAt: "2026-05-22T06:00:00.000Z", briefDate: "2026-05-22", modelGenerated: true },
+      { ref: "phantom-decision", firstSeenAt: "2026-05-22T07:00:00.000Z", briefDate: "2026-05-22", modelGenerated: true },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. resumeBriefer — `pacc resume-briefer`
+// ---------------------------------------------------------------------------
+
+describe("resumeBriefer", () => {
+  const NOW = new Date("2026-05-22T08:00:00.000Z");
+
+  it("clears an active pause and writes a principal audit row", () => {
+    const result = resumeBriefer({
+      pauseState: { paused: true, reason: "3 unique refs" },
+      actor: "principal",
+      now: NOW,
+    });
+    expect(result.kind).toBe("resumed");
+    if (result.kind === "resumed") {
+      expect(result.auditRow.actor).toBe("principal");
+      expect(result.auditRow.clearedReason).toBe("3 unique refs");
+      expect(result.auditRow.at).toBe(NOW.toISOString());
+    }
+  });
+
+  it("errors clearly when no pause is active", () => {
+    expect(resumeBriefer({ pauseState: null, actor: "principal", now: NOW })).toEqual({ kind: "not_paused" });
+    expect(
+      resumeBriefer({ pauseState: { paused: false, reason: null }, actor: "principal", now: NOW }),
+    ).toEqual({ kind: "not_paused" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. pausedBriefMarkdown
 // ---------------------------------------------------------------------------
 
 describe("pausedBriefMarkdown", () => {
@@ -339,7 +474,7 @@ describe("pausedBriefMarkdown", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Constants — sanity
+// 9. Constants — sanity
 // ---------------------------------------------------------------------------
 
 describe("constants", () => {
