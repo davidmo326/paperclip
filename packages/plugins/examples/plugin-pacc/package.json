@@ -22,7 +22,8 @@
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "workspace:*",
-    "@paperclipai/shared": "workspace:*"
+    "@paperclipai/shared": "workspace:*",
+    "chokidar": "^4.0.3"
   },
   "devDependencies": {
     "esbuild": "^0.27.3",

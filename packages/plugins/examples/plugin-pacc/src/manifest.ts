@@ -81,6 +81,13 @@ const manifest: PaperclipPluginManifestV1 = {
         "T-3.11 / PRD § 13.4: Friday prep — pre-authorized async work, self-pause boundaries, must-land-before-Monday. Writes 00_Daily/Weekend Prep - YYYY-MM-DD.md (idempotent).",
       schedule: "0 16 * * 5", // Fridays 16:00 local
     },
+    {
+      jobKey: JOB_KEYS.obsidianWatcherSupervisor,
+      displayName: "Obsidian Watcher Supervisor",
+      description:
+        "T-2.1: ensures the continuous vault filesystem watcher (chokidar) is running — started immediately in plugin setup(), with this job as an idempotent restart-if-dead safety net. Emits source.note.changed/renamed/deleted, tagged M1a/M1b via the T-2.4 value-anchor registry.",
+      schedule: "*/5 * * * *", // every 5 minutes
+    },
   ],
   ui: {
     slots: [
