@@ -450,3 +450,58 @@ function formatBriefDate(d: Date): string {
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
+
+// ---------------------------------------------------------------------------
+// Missed-run catch-up composition (T-3.6 review fix, 2026-07-10)
+// ---------------------------------------------------------------------------
+
+export interface MissedBriefCatchUpOptions {
+  now?: Date;
+  thresholdHourLocal?: number;
+  obsidianBaseDir?: string;
+  logger: {
+    info: (msg: string, meta?: Record<string, unknown>) => void;
+    warn: (msg: string, meta?: Record<string, unknown>) => void;
+    error?: (msg: string, meta?: Record<string, unknown>) => void;
+  };
+  /** Injected for tests; production callers pass a closure over real deps. */
+  runner: (options: RunScheduledBriefOptions) => Promise<ScheduledBriefResult>;
+  /** Extra options forwarded to the runner (guard, briefer options…). */
+  runnerOptions?: Partial<RunScheduledBriefOptions>;
+}
+
+export type MissedBriefCatchUpOutcome =
+  | { ran: false; reason: "brief_already_exists" | "too_early" }
+  | { ran: true; result: ScheduledBriefResult };
+
+/**
+ * Startup-time catch-up: if today's brief was missed (host down at 08:00),
+ * run it now through the exact same pipeline as the cron. This is the
+ * wiring `checkMissedRun` always assumed — live-fire on 2026-07-09 showed
+ * the decision function existed but nothing called it, reproducing the
+ * June silent-death mode. The runId carries `missed-run` so the audit
+ * trail records why the run happened outside the schedule.
+ */
+export async function runMissedBriefCatchUp(
+  options: MissedBriefCatchUpOptions,
+): Promise<MissedBriefCatchUpOutcome> {
+  const check = await checkMissedRun({
+    now: options.now,
+    thresholdHourLocal: options.thresholdHourLocal,
+    obsidianBaseDir: options.obsidianBaseDir,
+  });
+  if (!check.shouldRun) {
+    options.logger.info("missed-run check: no catch-up needed", { reason: check.reason });
+    return { ran: false, reason: check.reason };
+  }
+  options.logger.warn("missed-run check: today's brief missing past threshold — running catch-up", {
+    briefDate: check.briefDate,
+  });
+  const result = await options.runner({
+    ...options.runnerOptions,
+    now: options.now,
+    runId: `missed-run-${check.briefDate}`,
+    obsidianBaseDir: options.obsidianBaseDir,
+  });
+  return { ran: true, result };
+}

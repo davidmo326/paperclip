@@ -23,7 +23,7 @@ import {
 } from "./constants.js";
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
-import { runScheduledBrief } from "./lib/briefer/scheduled-brief.js";
+import { runMissedBriefCatchUp, runScheduledBrief } from "./lib/briefer/scheduled-brief.js";
 import {
   makeObsidianGuard, makeScheduledBriefDeps,
   makeCaptureFeedbackDeps,
@@ -801,6 +801,32 @@ const plugin: PaperclipPlugin = definePlugin({
       });
       return { allowed };
     });
+
+    // T-3.6 review fix: catch up a missed daily brief at startup. Fire-and-
+    // forget — a catch-up failure must never break plugin activation; the
+    // overlap guard inside runScheduledBrief makes a cron/catch-up race safe.
+    void (async () => {
+      try {
+        const { deps, model, eventCompanyId } = await makeScheduledBriefDeps(ctx);
+        const m1b = await makeObsidianGuard(ctx, eventCompanyId);
+        const outcome = await runMissedBriefCatchUp({
+          obsidianBaseDir: obsidianDailyDir(),
+          logger: ctx.logger,
+          runner: (options) => runScheduledBrief(deps, options),
+          runnerOptions: {
+            brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+            obsidianGuard: m1b.guard,
+          },
+        });
+        if (outcome.ran) {
+          ctx.logger.info("missed-run catch-up finished", { kind: outcome.result.kind });
+        }
+      } catch (err) {
+        ctx.logger.error("missed-run catch-up failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
 
     ctx.logger.info("pacc plugin setup complete");
   },
