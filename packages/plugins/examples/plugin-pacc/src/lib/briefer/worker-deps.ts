@@ -62,10 +62,10 @@ import type {
   ScheduledBriefDeps,
 } from "./scheduled-brief.js";
 import type { KillCriterionMetric } from "./kill-criterion.js";
-import nodePath from "node:path";
 import { callModelViaClaudeCli } from "./model-claude-cli.js";
 import { BRIEFER_DEFAULT_MODEL } from "./briefer.js";
 import { createValueAnchorService } from "../value-anchor/service.js";
+import { resolveVaultRoot } from "../vault-root.js";
 import {
   createObsidianFileWriter,
   type ObsidianFileWriter,
@@ -462,18 +462,9 @@ export async function makeObsidianGuard(
   return { guard, vaultRoot, registryWarnings: service.getWarnings() };
 }
 
-/**
- * Vault root resolution. PACC_VAULT_ROOT wins; else the parent of
- * PACC_OBSIDIAN_DIR (which points at 00_Daily); else the standard location.
- */
-function resolveVaultRoot(): string {
-  const override = process.env.PACC_VAULT_ROOT?.trim();
-  if (override) return override;
-  const dailyDir = process.env.PACC_OBSIDIAN_DIR?.trim();
-  if (dailyDir) return nodePath.dirname(dailyDir);
-  const home = process.env.HOME?.trim();
-  return home ? `${home}/llm_shared/Obsidian` : "/home/ubuntu/llm_shared/Obsidian";
-}
+// Vault root resolution — extracted to `../vault-root.js` (T-2.1) so the
+// filesystem watcher and any other adapter share one resolution order
+// instead of duplicating it.
 
 export async function makeScheduledBriefDeps(
   ctx: WorkerCtx,
