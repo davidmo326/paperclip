@@ -57,6 +57,8 @@ import {
   renderWeekendPrepMarkdown,
   type WeekendProjectInput,
 } from "./lib/briefer/weekend-prep.js";
+import { runInitialScan } from "./lib/source-index/indexer.js";
+import { makeSourceIndexerDeps, makeSourceIndexStore } from "./lib/source-index/worker-deps.js";
 
 /**
  * Obsidian daily directory — where briefs, weekly reviews, and weekend prep
@@ -800,6 +802,40 @@ const plugin: PaperclipPlugin = definePlugin({
         now: new Date(),
       });
       return { allowed };
+    });
+
+    // T-2.2: trigger the initial full-vault source-index scan. Resumable by
+    // design: an interrupted run leaves a checkpoint in plugin_state and the
+    // next invocation skips already-indexed files. Tier-agnostic (v3
+    // amendment) — M1a/M1b is joined at query time against T-2.4's registry.
+    ctx.actions.register("index-vault", async (params) => {
+      const vaultRoot = typeof params.vaultRoot === "string" && params.vaultRoot ? params.vaultRoot : undefined;
+      const deps = makeSourceIndexerDeps(ctx, { vaultRoot });
+      const result = await runInitialScan(deps);
+      ctx.logger.info("index-vault action complete", {
+        vaultRoot: deps.vaultRoot,
+        ...result,
+      });
+      return { vaultRoot: deps.vaultRoot, ...result };
+    });
+
+    // T-2.2: index status — record count + in-flight scan checkpoint.
+    ctx.data.register("source-index-status", async () => {
+      const store = makeSourceIndexStore(ctx);
+      const [count, checkpoint] = await Promise.all([store.count(), store.getCheckpoint()]);
+      return { count, checkpoint };
+    });
+
+    // T-2.2: one record by vault-relative path.
+    ctx.data.register("source-index-get", async (params) => {
+      const path = typeof params.path === "string" ? params.path : "";
+      if (!path) return null;
+      return await makeSourceIndexStore(ctx).getByPath(path);
+    });
+
+    // T-2.2: all indexed paths + content hashes (stale-detection surface).
+    ctx.data.register("source-index-catalog", async () => {
+      return await makeSourceIndexStore(ctx).listPathsAndHashes();
     });
 
     ctx.logger.info("pacc plugin setup complete");
