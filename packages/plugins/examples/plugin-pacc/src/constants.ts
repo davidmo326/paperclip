@@ -63,4 +63,19 @@ export const JOB_KEYS = {
   weeklyReview: "weekly-review",
   /** T-3.11 — weekend prep (Fri 16:00). */
   weekendPrep: "weekend-prep",
+  /**
+   * T-2.1 — supervisor tick for the Obsidian filesystem watcher. The watcher
+   * itself is a continuous chokidar process started once in `setup()`; this
+   * job is a self-healing safety net that (idempotently) restarts it if the
+   * worker process was recycled without a fresh `setup()` call, or if the
+   * watch handle died silently.
+   */
+  obsidianWatcherSupervisor: "obsidian-watcher-supervisor",
+} as const;
+
+/** T-2.1 — event names emitted by the Obsidian filesystem watcher. */
+export const OBSIDIAN_WATCHER_EVENTS = {
+  changed: "source.note.changed",
+  renamed: "source.note.renamed",
+  deleted: "source.note.deleted",
 } as const;

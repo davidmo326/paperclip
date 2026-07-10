@@ -57,6 +57,8 @@ import {
   renderWeekendPrepMarkdown,
   type WeekendProjectInput,
 } from "./lib/briefer/weekend-prep.js";
+import { startObsidianWatcher, type ObsidianWatcherHandle } from "./lib/obsidian-watcher-deps.js";
+import { resolveVaultRoot } from "./lib/vault-root.js";
 
 /**
  * Obsidian daily directory — where briefs, weekly reviews, and weekend prep
@@ -307,12 +309,54 @@ async function generateResumeDraft(
 }
 
 // ---------------------------------------------------------------------------
+// T-2.1: Obsidian filesystem watcher — continuous chokidar process
+// ---------------------------------------------------------------------------
+
+/**
+ * Module-level so the supervisor job (a periodic safety net) can check
+ * whether `setup()` already started the watcher for this worker process,
+ * rather than spinning up a second concurrent chokidar watch.
+ */
+let obsidianWatcherHandle: ObsidianWatcherHandle | null = null;
+
+async function ensureObsidianWatcherRunning(ctx: PluginContext): Promise<void> {
+  if (obsidianWatcherHandle) return;
+  const companies = await ctx.companies.list({ limit: 1, offset: 0 });
+  const eventCompanyId = companies[0]?.id ?? "instance";
+  try {
+    obsidianWatcherHandle = await startObsidianWatcher({
+      vaultRoot: resolveVaultRoot(),
+      emit: async (event) => {
+        const { type, ...payload } = event;
+        await ctx.events.emit(type, eventCompanyId, payload);
+      },
+      logger: ctx.logger,
+    });
+    ctx.logger.info("obsidian-watcher started", {
+      vaultRoot: obsidianWatcherHandle.vaultRoot,
+    });
+    const warnings = obsidianWatcherHandle.registryWarnings();
+    if (warnings.length > 0) {
+      ctx.logger.warn("obsidian-watcher: value-anchor registry warnings", { warnings });
+    }
+  } catch (error) {
+    ctx.logger.warn("obsidian-watcher: failed to start", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin definition
 // ---------------------------------------------------------------------------
 
 const plugin: PaperclipPlugin = definePlugin({
   async setup(ctx: PluginContext): Promise<void> {
     ctx.logger.info("pacc plugin starting", { pluginId: PLUGIN_ID });
+
+    // T-2.1: start the continuous vault watcher immediately at plugin
+    // startup (not gated behind a cron tick — it's a long-lived process).
+    await ensureObsidianWatcherRunning(ctx);
 
     // -----------------------------------------------------------------------
     // Event handlers
@@ -563,6 +607,22 @@ const plugin: PaperclipPlugin = definePlugin({
           date: prep.date,
           path: write.path,
           kind: write.kind,
+        });
+      },
+    );
+
+    // -----------------------------------------------------------------------
+    // Job: T-2.1 supervisor — idempotent restart-if-dead safety net for the
+    // continuous Obsidian watcher started above in setup().
+    // -----------------------------------------------------------------------
+
+    ctx.jobs.register(
+      JOB_KEYS.obsidianWatcherSupervisor,
+      async (job: PluginJobContext): Promise<void> => {
+        await ensureObsidianWatcherRunning(ctx);
+        ctx.logger.info("obsidian-watcher-supervisor tick complete", {
+          runId: job.runId,
+          running: obsidianWatcherHandle !== null,
         });
       },
     );

@@ -442,6 +442,9 @@ importers:
       '@paperclipai/shared':
         specifier: workspace:*
         version: link:../../../shared
+      chokidar:
+        specifier: ^4.0.3
+        version: 4.0.3
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
