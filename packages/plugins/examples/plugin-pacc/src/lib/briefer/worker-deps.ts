@@ -466,7 +466,7 @@ export async function makeObsidianGuard(
  * Vault root resolution. PACC_VAULT_ROOT wins; else the parent of
  * PACC_OBSIDIAN_DIR (which points at 00_Daily); else the standard location.
  */
-function resolveVaultRoot(): string {
+export function resolveVaultRoot(): string {
   const override = process.env.PACC_VAULT_ROOT?.trim();
   if (override) return override;
   const dailyDir = process.env.PACC_OBSIDIAN_DIR?.trim();
