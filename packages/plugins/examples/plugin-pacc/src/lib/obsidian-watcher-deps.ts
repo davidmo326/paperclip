@@ -29,6 +29,77 @@ export interface ObsidianWatcherEventEmitter {
   (event: ObsidianWatcherEvent): void | Promise<void>;
 }
 
+// ---------------------------------------------------------------------------
+// T-2.2b: forward watcher events to the source indexer
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal surface of the T-2.2 indexer's event-consumption functions
+ * (`applyNoteChanged` / `applyNoteRenamed` / `applyNoteDeleted` in
+ * `source-index/indexer.ts`) that the watcher glue needs. Kept as a
+ * structural type here (rather than importing `SourceIndexerDeps` and
+ * binding these functions to it) so this adapter file doesn't need to know
+ * how the indexer's deps are assembled — the caller (worker.ts) partially
+ * applies the real functions against `makeSourceIndexerDeps(ctx)`.
+ */
+export interface SourceIndexForwarderDeps {
+  applyNoteChanged(event: { path: string }): Promise<unknown>;
+  applyNoteRenamed(event: { oldPath: string; newPath: string }): Promise<unknown>;
+  applyNoteDeleted(event: { path: string }): Promise<unknown>;
+  logger?: { warn(msg: string, fields?: Record<string, unknown>): void };
+}
+
+function isMarkdownPath(p: string): boolean {
+  return p.toLowerCase().endsWith(".md");
+}
+
+/**
+ * Wraps an `ObsidianWatcherEventEmitter` (in production, the closure that
+ * forwards to `ctx.events.emit`) so every markdown watcher event is ALSO
+ * applied to the T-2.2 source index, keeping it live after the initial scan.
+ *
+ * - Markdown-scoped: the watcher may observe non-`.md` files (e.g.
+ *   attachments); those still reach the wrapped emitter but never the
+ *   indexer, which only tracks notes. For a rename, `newPath` is the
+ *   relevant path — a rename INTO `.md` scope is indexed, a rename OUT of
+ *   it is not (the indexer never held a record keyed on a non-md path).
+ * - Indexer failures never propagate: they're logged and the wrapped
+ *   emitter's own delivery (already awaited before the indexer runs) is
+ *   unaffected, so one broken note can't stop the watcher's event flow.
+ */
+export function withSourceIndexForwarding(
+  emit: ObsidianWatcherEventEmitter,
+  indexer: SourceIndexForwarderDeps,
+): ObsidianWatcherEventEmitter {
+  return async (event: ObsidianWatcherEvent) => {
+    await emit(event);
+    try {
+      switch (event.type) {
+        case "source.note.changed":
+          if (isMarkdownPath(event.path)) {
+            await indexer.applyNoteChanged({ path: event.path });
+          }
+          break;
+        case "source.note.renamed":
+          if (isMarkdownPath(event.newPath)) {
+            await indexer.applyNoteRenamed({ oldPath: event.oldPath, newPath: event.newPath });
+          }
+          break;
+        case "source.note.deleted":
+          if (isMarkdownPath(event.path)) {
+            await indexer.applyNoteDeleted({ path: event.path });
+          }
+          break;
+      }
+    } catch (err) {
+      indexer.logger?.warn("obsidian-watcher: source-index apply failed, continuing", {
+        eventType: event.type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+}
+
 export interface ObsidianWatcherHandle {
   vaultRoot: string;
   registryWarnings(): string[];

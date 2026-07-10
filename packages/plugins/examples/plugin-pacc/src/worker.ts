@@ -57,9 +57,18 @@ import {
   renderWeekendPrepMarkdown,
   type WeekendProjectInput,
 } from "./lib/briefer/weekend-prep.js";
-import { startObsidianWatcher, type ObsidianWatcherHandle } from "./lib/obsidian-watcher-deps.js";
+import {
+  startObsidianWatcher,
+  withSourceIndexForwarding,
+  type ObsidianWatcherHandle,
+} from "./lib/obsidian-watcher-deps.js";
 import { resolveVaultRoot } from "./lib/vault-root.js";
-import { runInitialScan } from "./lib/source-index/indexer.js";
+import {
+  applyNoteChanged,
+  applyNoteDeleted,
+  applyNoteRenamed,
+  runInitialScan,
+} from "./lib/source-index/indexer.js";
 import { makeSourceIndexerDeps, makeSourceIndexStore } from "./lib/source-index/worker-deps.js";
 
 /**
@@ -326,12 +335,26 @@ async function ensureObsidianWatcherRunning(ctx: PluginContext): Promise<void> {
   const companies = await ctx.companies.list({ limit: 1, offset: 0 });
   const eventCompanyId = companies[0]?.id ?? "instance";
   try {
-    obsidianWatcherHandle = await startObsidianWatcher({
-      vaultRoot: resolveVaultRoot(),
-      emit: async (event) => {
+    // T-2.2b: forward every markdown watcher event to the source indexer as
+    // well as ctx.events, so the index stays live after the initial scan.
+    // Indexer deps are assembled fresh per-call (cheap: fs + ctx.state
+    // wrappers) rather than cached, matching the `index-vault` action above.
+    const indexerDeps = makeSourceIndexerDeps(ctx);
+    const emit = withSourceIndexForwarding(
+      async (event) => {
         const { type, ...payload } = event;
         await ctx.events.emit(type, eventCompanyId, payload);
       },
+      {
+        applyNoteChanged: (event) => applyNoteChanged(indexerDeps, event),
+        applyNoteRenamed: (event) => applyNoteRenamed(indexerDeps, event),
+        applyNoteDeleted: (event) => applyNoteDeleted(indexerDeps, event),
+        logger: ctx.logger,
+      },
+    );
+    obsidianWatcherHandle = await startObsidianWatcher({
+      vaultRoot: resolveVaultRoot(),
+      emit,
       logger: ctx.logger,
     });
     ctx.logger.info("obsidian-watcher started", {
