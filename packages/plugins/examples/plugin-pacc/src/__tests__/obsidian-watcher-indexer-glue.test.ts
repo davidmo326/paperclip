@@ -144,4 +144,19 @@ describe("withSourceIndexForwarding", () => {
     expect(downstream).toHaveLength(2);
     expect(warnings.length).toBeGreaterThanOrEqual(1);
   });
+
+  it("treats a rename OUT of markdown scope as a deletion of the old path", async () => {
+    // note.md -> note.txt: the watcher hash-correlates this into ONE rename
+    // event; the index held a record for note.md and must drop it, or the
+    // record goes permanently stale.
+    await emit({
+      type: "source.note.renamed",
+      oldPath: "/vault/note.md",
+      newPath: "/vault/note.txt",
+      hash: "h1",
+      tier: "M1a",
+    });
+    expect(indexerCalls.renamed).toHaveLength(0);
+    expect(indexerCalls.deleted).toEqual([{ path: "/vault/note.md" }]);
+  });
 });

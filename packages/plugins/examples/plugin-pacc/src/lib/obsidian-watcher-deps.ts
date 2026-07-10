@@ -83,6 +83,10 @@ export function withSourceIndexForwarding(
         case "source.note.renamed":
           if (isMarkdownPath(event.newPath)) {
             await indexer.applyNoteRenamed({ oldPath: event.oldPath, newPath: event.newPath });
+          } else if (isMarkdownPath(event.oldPath)) {
+            // Renamed OUT of markdown scope (note.md -> note.txt): the index
+            // held a record for oldPath; drop it or it goes permanently stale.
+            await indexer.applyNoteDeleted({ path: event.oldPath });
           }
           break;
         case "source.note.deleted":
