@@ -61,6 +61,8 @@ import { startObsidianWatcher, type ObsidianWatcherHandle } from "./lib/obsidian
 import { resolveVaultRoot } from "./lib/vault-root.js";
 import { runInitialScan } from "./lib/source-index/indexer.js";
 import { makeSourceIndexerDeps, makeSourceIndexStore } from "./lib/source-index/worker-deps.js";
+import { runAssociation } from "./lib/note-association/associate.js";
+import { makeNoteAssociationDeps, makeNoteAssociationStore } from "./lib/note-association/worker-deps.js";
 
 /**
  * Obsidian daily directory — where briefs, weekly reviews, and weekend prep
@@ -921,6 +923,29 @@ const plugin: PaperclipPlugin = definePlugin({
     // T-2.2: all indexed paths + content hashes (stale-detection surface).
     ctx.data.register("source-index-catalog", async () => {
       return await makeSourceIndexStore(ctx).listPathsAndHashes();
+    });
+
+    // T-2.3: recompute note-to-project association for every indexed note.
+    // Input is T-2.2's source index, not the vault — this action never walks
+    // the filesystem itself.
+    ctx.actions.register("associate-notes", async () => {
+      const sourceIndex = makeSourceIndexStore(ctx);
+      const deps = await makeNoteAssociationDeps(ctx, sourceIndex);
+      const result = await runAssociation(deps);
+      ctx.logger.info("associate-notes action complete", { ...result });
+      return result;
+    });
+
+    // T-2.3: one association record by vault-relative path.
+    ctx.data.register("note-association-get", async (params) => {
+      const path = typeof params.path === "string" ? params.path : "";
+      if (!path) return null;
+      return await makeNoteAssociationStore(ctx).getByPath(path);
+    });
+
+    // T-2.3: association summary — per-project counts + unassociated bucket.
+    ctx.data.register("note-association-summary", async () => {
+      return await makeNoteAssociationStore(ctx).summary();
     });
 
     ctx.logger.info("pacc plugin setup complete");
