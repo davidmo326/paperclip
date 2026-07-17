@@ -128,6 +128,20 @@ export class ObsidianWatcherEngine {
   private readonly pendingDeletes = new Map<string, PendingDelete>();
   private readonly lastKnownHash = new Map<string, string>();
 
+  /**
+   * Re-entrancy guard. Ticks are driven by a fire-and-forget
+   * `setInterval(() => { void engine.tick(); }, 50)` in the adapter, so once a
+   * tick starts awaiting slow work (the initial-scan burst, where each emit
+   * fans out to the source-indexer's `state.set` RPCs), every subsequent 50ms
+   * tick overlaps it and drains the same `pendingChanges` queue concurrently.
+   * That concurrency floods the worker→host RPC channel until every
+   * `state.set` times out (30s) — the T-2.2-burst storm. Serialising ticks
+   * (skip if one is in flight) makes the drain sequential, matching the
+   * already-proven-fast sequential scan; pending work is picked up by the next
+   * tick after the in-flight one finishes.
+   */
+  private ticking = false;
+
   constructor(deps: ObsidianWatcherEngineDeps) {
     this.deps = deps as ObsidianWatcherEngine["deps"];
     this.debounceMs = deps.debounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -181,13 +195,23 @@ export class ObsidianWatcherEngine {
    * directly with synthetic timestamps in tests).
    */
   async tick(now: number = this.clock()): Promise<void> {
-    // Rename correlation must run before delete-expiry so an add that
-    // arrives in the same tick as an expiring delete still gets a chance to
-    // match (processed in handleAdd's own correlation check, which fires
-    // synchronously before this tick — but a same-tick expiry could race a
-    // slightly-later add in the same tick batch, so we resolve deletes last).
-    await this.processDueChanges(now);
-    await this.expireDueDeletes(now);
+    // Re-entrancy guard — see `ticking` field doc. Without this, overlapping
+    // fire-and-forget ticks process the initial-scan burst concurrently and
+    // flood the host RPC channel (the T-2.2-burst storm). Skip when busy; the
+    // next tick drains whatever is still pending.
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      // Rename correlation must run before delete-expiry so an add that
+      // arrives in the same tick as an expiring delete still gets a chance to
+      // match (processed in handleAdd's own correlation check, which fires
+      // synchronously before this tick — but a same-tick expiry could race a
+      // slightly-later add in the same tick batch, so we resolve deletes last).
+      await this.processDueChanges(now);
+      await this.expireDueDeletes(now);
+    } finally {
+      this.ticking = false;
+    }
   }
 
   private async processDueChanges(now: number): Promise<void> {

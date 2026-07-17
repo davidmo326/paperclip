@@ -343,3 +343,70 @@ describe("ObsidianWatcherEngine — rename detection", () => {
     expect(events.filter((e) => e.type === "source.note.deleted")).toHaveLength(1);
   });
 });
+
+describe("ObsidianWatcherEngine — tick re-entrancy guard (T-2.2-burst)", () => {
+  // Reproduces the live storm at unit scale: the adapter drives tick() off a
+  // fire-and-forget `setInterval(..., 50)`, so a slow tick (initial-scan burst
+  // fanning out to the indexer's state.set RPCs) overlaps subsequent ticks,
+  // which drain the same pending-changes queue CONCURRENTLY and flood the
+  // worker→host RPC channel until every call times out. The guard must make
+  // the drain sequential — at most one emit in flight at a time.
+  it("skips ticks fired while another is in flight so a burst drains sequentially (no concurrent RPC flood)", async () => {
+    const files = makeFiles({
+      "/vault/a.md": "a",
+      "/vault/b.md": "b",
+      "/vault/c.md": "c",
+    });
+    const registry = makeRegistry([]);
+    let resolveEmit!: () => void;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const engine = createObsidianWatcherEngine({
+      readFile: files.readFile,
+      hash: simpleHash,
+      registry,
+      debounceMs: 0,
+      verifyDelayMs: 0,
+      // Each emit parks until the test releases it; track concurrent in-flight emits.
+      emit: () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise<void>((resolve) => {
+          resolveEmit = () => {
+            inFlight -= 1;
+            resolve();
+          };
+        });
+      },
+    });
+
+    // Three files due immediately.
+    engine.handleAdd("/vault/a.md", 0);
+    engine.handleAdd("/vault/b.md", 0);
+    engine.handleAdd("/vault/c.md", 0);
+
+    // Debounce pass (schedules the verifies). No emit here, so it resolves fast.
+    await engine.tick(1000);
+
+    // Verify pass: this is where emits happen. Fire the verifying tick, then
+    // extra ticks while it's in flight — exactly what the 50ms fire-and-forget
+    // timer does. The first parks on file a's emit; the rest must skip.
+    const tickVerify = engine.tick(1000);
+    void engine.tick(1000); // would double-process concurrently without the guard
+    void engine.tick(1000);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(maxInFlight).toBe(1); // only file a; the concurrent ticks were skipped
+
+    // Release file a; the same in-flight tick moves on to b, then c, sequentially.
+    resolveEmit();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(maxInFlight).toBe(1);
+    resolveEmit();
+    await new Promise((r) => setTimeout(r, 0));
+    resolveEmit();
+    await tickVerify;
+
+    expect(maxInFlight).toBe(1); // never concurrent across the whole drain
+  });
+});
