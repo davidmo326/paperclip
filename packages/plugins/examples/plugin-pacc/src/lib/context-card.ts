@@ -100,6 +100,14 @@ export interface ContextCardInputs {
   activeTasks: TaskSummary[];
   /** Per-project authority grants (filtered to this project, not revoked). */
   authority: AuthoritySummary[];
+  /**
+   * T-2.10: M1a notes associated to this project by the grounding pipeline
+   * (note-association catalog → source index). The caller (worker-deps) must
+   * sort these by path so the card's cacheKey + render stay deterministic.
+   * Optional only so existing buildContextCard fixtures keep compiling; the
+   * live briefer always supplies them (empty [] when a project has none).
+   */
+  associatedNoteRefs?: SourceRef[];
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +212,13 @@ export function buildContextCard(
   const goal = pickAnswer(state?.intent ?? null, state?.sourceRefs ?? []);
   const status = pickAnswer(state?.currentStatus ?? null, state?.sourceRefs ?? []);
   const blockers = pickAnswer(state?.blockerSummary ?? null, state?.sourceRefs ?? []);
-  const nextActions = pickAnswer(state?.nextSmallestAction ?? null, state?.sourceRefs ?? []);
+  // T-2.10: ground the next action in the project's associated M1a notes (the
+  // grounding pipeline's output), merged with any M2 refs the steward cited.
+  // Sorted + deduped by path so the card (cacheKey) + brief render are deterministic.
+  const nextActions = pickAnswer(
+    state?.nextSmallestAction ?? null,
+    mergeSourceRefs(state?.sourceRefs ?? [], inputs.associatedNoteRefs ?? []),
+  );
   const killCriteria = pickAnswer(state?.killCriteria ?? null, state?.sourceRefs ?? []);
   const doNotRethink = pickAnswer(state?.doNotRethink ?? null, state?.sourceRefs ?? []);
 
@@ -345,7 +359,31 @@ function collectAllSourceRefs(inputs: ContextCardInputs): SourceRef[] {
   });
   state?.escalations?.forEach((e) => e.sourceRefs.forEach(push));
   inputs.recentDecisions.forEach((d) => d.sourceRefs.forEach(push));
+  // T-2.10: the grounding pipeline's associated M1a notes (already path-sorted
+  // by the caller) so the brief's sourceNotes / card-level sourceRefs carry
+  // real vault notes, not just M2 self-references.
+  (inputs.associatedNoteRefs ?? []).forEach(push);
 
+  return out;
+}
+
+/**
+ * Concatenate SourceRef lists, dedupe by path, and sort by path — deterministic
+ * (T-2.10 grounding + T-3.3 byte-identical render). The render layer sorts its
+ * own arrays too, but the card's cacheKey (SHA-256 of stableStringify(inputs))
+ * does NOT normalise array element order, so the merge must be stable here.
+ */
+function mergeSourceRefs(...lists: SourceRef[][]): SourceRef[] {
+  const seen = new Set<string>();
+  const out: SourceRef[] = [];
+  for (const list of lists) {
+    for (const ref of list) {
+      if (!ref || seen.has(ref.path)) continue;
+      seen.add(ref.path);
+      out.push(ref);
+    }
+  }
+  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return out;
 }
 

@@ -47,7 +47,7 @@ export function makeNoteAssociationStore(ctx: NoteAssociationCtx): NoteAssociati
 }
 
 /** Default location of the seed file: sibling ControlPlane checkout's seed/portfolio-seed.json. */
-function defaultPortfolioSeedPath(): string {
+export function defaultPortfolioSeedPath(): string {
   const home = process.env.HOME?.trim();
   const root = home ? `${home}/llm_shared` : "/home/ubuntu/llm_shared";
   return path.join(root, "ControlPlane", "seed", "portfolio-seed.json");

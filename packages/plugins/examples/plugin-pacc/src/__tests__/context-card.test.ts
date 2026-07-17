@@ -655,3 +655,56 @@ describe("activeTasks pass-through", () => {
     expect(md).toContain("user:principal");
   });
 });
+
+describe("buildContextCard — T-2.10 grounding (associatedNoteRefs)", () => {
+  it("grounds nextActions in associated M1a notes, upgrading low->high when M2 had no refs", () => {
+    const inputs = baseInputs({
+      project: {
+        id: "p-1",
+        name: "x",
+        controlPlaneState: { ...baseState(), sourceRefs: [] },
+        controlPlaneUpdatedAt: null,
+      },
+      associatedNoteRefs: [ref("/v/notes/research.md", "c"), ref("/v/notes/cohort.md", "d")],
+    });
+    const card = buildContextCard(inputs, NOW);
+    expect(card.nextActions.confidence).toBe("high");
+    expect(card.nextActions.sourceRefs.map((r) => r.path)).toEqual([
+      "/v/notes/cohort.md",
+      "/v/notes/research.md",
+    ]);
+  });
+
+  it("merges M2 sourceRefs with associatedNoteRefs, deduped by path and sorted", () => {
+    const inputs = baseInputs({
+      associatedNoteRefs: [ref("/v/zzz.md", "z"), ref("/v/PRD.md", "a")], // PRD.md dupes state.sourceRefs
+    });
+    const card = buildContextCard(inputs, NOW);
+    expect(card.nextActions.sourceRefs.map((r) => r.path)).toEqual(["/v/PRD.md", "/v/zzz.md"]);
+  });
+
+  it("includes associatedNoteRefs in the card-level sourceRefs", () => {
+    const inputs = baseInputs({ associatedNoteRefs: [ref("/v/notes/extra.md", "e")] });
+    const card = buildContextCard(inputs, NOW);
+    expect(card.sourceRefs.map((r) => r.path)).toContain("/v/notes/extra.md");
+  });
+
+  it("is deterministic: same associatedNoteRefs in any input order yield the same nextActions.sourceRefs", () => {
+    const a = buildContextCard(
+      baseInputs({ associatedNoteRefs: [ref("/v/a.md", "1"), ref("/v/b.md", "2")] }),
+      NOW,
+    );
+    const b = buildContextCard(
+      baseInputs({ associatedNoteRefs: [ref("/v/b.md", "2"), ref("/v/a.md", "1")] }),
+      NOW,
+    );
+    expect(a.nextActions.sourceRefs.map((r) => r.path)).toEqual(
+      b.nextActions.sourceRefs.map((r) => r.path),
+    );
+  });
+
+  it("omits associatedNoteRefs gracefully (back-compat): no field -> behaves as before", () => {
+    const card = buildContextCard(baseInputs(), NOW);
+    expect(card.nextActions.sourceRefs.map((r) => r.path)).toEqual(["/v/PRD.md"]);
+  });
+});

@@ -72,6 +72,10 @@ import {
 } from "../value-anchor/write-obsidian-file.js";
 import type { CaptureFeedbackDeps } from "./capture-feedback.js";
 import type { BriefFeedbackRow } from "./feedback.js";
+import type { SourceRef } from "@paperclipai/shared";
+import { makeSourceIndexStore } from "../source-index/worker-deps.js";
+import { makeNoteAssociationStore, defaultPortfolioSeedPath } from "../note-association/worker-deps.js";
+import { createNoteAssociationFsDeps } from "../note-association/fs-deps.js";
 
 // ---------------------------------------------------------------------------
 // Minimal ctx surface
@@ -288,8 +292,69 @@ export function makeCaptureFeedbackDeps(ctx: WorkerCtx): CaptureFeedbackDeps {
 // ContextCard assembly from live projects + overlays
 // ---------------------------------------------------------------------------
 
+/**
+ * T-2.10: build slug -> associated M1a SourceRef[] from the grounding pipeline
+ * (note-association catalog -> source-index records). Catalog entries are
+ * grouped by their seed-slug projectId, each path resolved to a record
+ * (path + contentHash), and the per-slug list sorted by path so cards stay
+ * deterministic. Vanished index records are skipped. An unreadable/empty
+ * association store yields an empty map (brief degrades to M2-only — not fatal).
+ *
+ * Firewall-clean: uses only the already-adapter-constructed stores built from
+ * the same `ctx` (`Pick<WorkerCtx,"state"|"logger">`).
+ */
+async function buildAssociatedNoteRefsBySlug(ctx: WorkerCtx): Promise<Map<string, SourceRef[]>> {
+  const assocStore = makeNoteAssociationStore(ctx);
+  const indexStore = makeSourceIndexStore(ctx);
+  let catalog: Record<string, { projectId: string | null }>;
+  try {
+    catalog = (await assocStore.listCatalog()) as Record<string, { projectId: string | null }>;
+  } catch {
+    return new Map();
+  }
+  const pathsBySlug = new Map<string, string[]>();
+  for (const [notePath, entry] of Object.entries(catalog)) {
+    if (!entry || !entry.projectId) continue; // unassociated bucket
+    const list = pathsBySlug.get(entry.projectId);
+    if (list) list.push(notePath);
+    else pathsBySlug.set(entry.projectId, [notePath]);
+  }
+  const out = new Map<string, SourceRef[]>();
+  for (const [slug, paths] of pathsBySlug) {
+    const records = await Promise.all([...paths].sort().map((p) => indexStore.getByPath(p)));
+    const refs: SourceRef[] = [];
+    for (const r of records) {
+      if (!r) continue;
+      refs.push({ kind: "M1a", path: r.path, hash: r.contentHash, capturedAt: r.lastIndexedAt });
+    }
+    out.set(slug, refs);
+  }
+  return out;
+}
+
+/**
+ * T-2.10: project name -> seed slug. The association catalog is keyed by seed
+ * slug; paperclip projects are UUID-keyed and named. The two identity spaces
+ * are joined by NAME (seed name === paperclip project name, e.g. "Circlo" /
+ * "Storycrafter AI"). Loaded once per run from portfolio-seed.json.
+ */
+async function buildSlugByName(ctx: WorkerCtx): Promise<Map<string, string>> {
+  const fs = createNoteAssociationFsDeps(ctx.logger);
+  const seedPath = process.env.PACC_PORTFOLIO_SEED_PATH?.trim() || defaultPortfolioSeedPath();
+  const projects = await fs.loadProjects(seedPath, resolveVaultRoot());
+  const out = new Map<string, string>();
+  for (const p of projects) out.set(p.name, p.slug);
+  return out;
+}
+
 export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProjectInput[]> {
   const companies = await ctx.companies.list({ limit: 200, offset: 0 });
+  // T-2.10: ground the brief in the association catalog (slug-keyed), joined to
+  // paperclip projects by name. Both built once per run.
+  const [refsBySlug, slugByName] = await Promise.all([
+    buildAssociatedNoteRefsBySlug(ctx),
+    buildSlugByName(ctx),
+  ]);
   const cards: BrieferProjectInput[] = [];
 
   for (const company of companies) {
@@ -305,6 +370,9 @@ export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProje
         ctx.state.get(projectKey(project.id, CONFLICTS_STATE_KEY)) as Promise<ProjectConflictsState | null>,
       ]);
 
+      // T-2.10: this project's associated M1a notes (slug joined by name).
+      const associatedNoteRefs = refsBySlug.get(slugByName.get(project.name) ?? "") ?? [];
+
       const card: ContextCard = buildContextCard({
         project: {
           id: project.id,
@@ -319,6 +387,7 @@ export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProje
         recentDecisions: [], // no decisions-table SDK client yet — follow-up
         activeTasks: [], // no issues wiring yet — follow-up
         authority: [], // no authority_profiles SDK client yet — follow-up
+        associatedNoteRefs,
       });
       cards.push({ projectId: project.id, projectName: project.name, card });
     }
