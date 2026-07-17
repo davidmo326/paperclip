@@ -175,7 +175,7 @@ describe("override round-trip (fs-deps + runAssociation)", () => {
     const fsDeps = createNoteAssociationFsDeps();
     const projects = await fsDeps.loadProjects(seedPath, VAULT_ROOT);
     expect(projects).toEqual([
-      { slug: "circlo", name: "Circlo", folderRelPath: "10_Builds/Circlo", hubNoteNames: ["BRM_philosophy"] },
+      { slug: "circlo", name: "Circlo", folderRelPath: "10_Builds/Circlo", hubNoteNames: ["BRM_philosophy"], matchTags: ["circlo"] },
     ]);
   });
 

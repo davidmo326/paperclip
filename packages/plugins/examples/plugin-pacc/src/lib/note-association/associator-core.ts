@@ -6,12 +6,17 @@
  * strictly descending):
  *   1. Explicit frontmatter `project: <slug>` -> 1.0
  *   2. Path prefix `10_Builds/<Project folder>/...` -> 0.85
- *   3. Wikilink FROM this note TO a known project hub note, 1 hop -> 0.6
+ *   3. Note frontmatter `tags` intersecting the project's declared tag(s) -> 0.75
+ *      (T-2.3-tag). The principal's stated PRIMARY discovery channel for project
+ *      docs is a vault tag bound to the project — often on notes outside
+ *      `10_Builds/` that path-prefix (rule 2) can't catch. A project's match
+ *      tags default to its slug and can be overridden via the seed `tags` field.
+ *   4. Wikilink FROM this note TO a known project hub note, 1 hop -> 0.6
  *      ("hub note" = one of the project's `visionRefs`, see
  *      project-directory.ts)
- *   4. Title fuzzy match (Jaro-Winkler >= 0.9 against the project's name
+ *   5. Title fuzzy match (Jaro-Winkler >= 0.9 against the project's name
  *      or slug) -> 0.4
- *   No match -> `projectId: null` (unassociated bucket).
+ *      No match -> `projectId: null` (unassociated bucket).
  *
  * The manual override file (`_pacc_overrides.json`) beats every heuristic
  * above, INCLUDING frontmatter's 1.0 — it is read and applied by the
@@ -31,6 +36,7 @@ export type AssociationMethod =
   | "override"
   | "frontmatter"
   | "path-prefix"
+  | "tag"
   | "wikilink-hub"
   | "title-fuzzy"
   | "none";
@@ -53,9 +59,17 @@ export interface AssociationNoteInput {
   frontmatter: Record<string, string | string[]> | null;
   /** Outbound `[[wikilink]]` targets, as extracted by source-index. */
   wikilinks: string[];
+  /**
+   * Note tags (T-2.3-tag), normalised by the caller (lowercase, trimmed) —
+   * typically extracted from frontmatter `tags`. Optional for back-compat
+   * with fixtures that don't exercise the tag rule; the real caller always
+   * populates it.
+   */
+  tags?: string[];
 }
 
 const TITLE_FUZZY_THRESHOLD = 0.9;
+const TAG_CONFIDENCE = 0.75;
 
 /** Note title: basename without extension. */
 export function titleFromPath(notePath: string): string {
@@ -98,7 +112,23 @@ export function computeAssociation(
     }
   }
 
-  // 3. Wikilink from this note to a known project hub note (1 hop) -> 0.6
+  // 3. Note frontmatter tags intersect the project's declared tag(s) -> 0.75
+  // (T-2.3-tag). Both sides are already normalised (lowercase/trim) by the
+  // callers — project-directory builds matchTags lowercased, associate.ts
+  // normalises note tags — so a plain intersect suffices. First project (in
+  // seed order) whose matchTags overlap wins; tag confidence (0.75) strictly
+  // exceeds wikilink-hub (0.6), so this rule sits above it.
+  const noteTags = (note.tags ?? []).map((t) => t.toLowerCase().trim()).filter((t) => t.length > 0);
+  if (noteTags.length > 0) {
+    const noteTagSet = new Set(noteTags);
+    for (const project of projects) {
+      if (project.matchTags.some((tag) => noteTagSet.has(tag))) {
+        return { path: note.path, projectId: project.slug, confidence: TAG_CONFIDENCE, method: "tag", associatedAt };
+      }
+    }
+  }
+
+  // 4. Wikilink from this note to a known project hub note (1 hop) -> 0.6
   const lowerLinks = new Set(note.wikilinks.map((w) => w.toLowerCase()));
   for (const project of projects) {
     if (project.hubNoteNames.some((hub) => lowerLinks.has(hub.toLowerCase()))) {
@@ -106,7 +136,7 @@ export function computeAssociation(
     }
   }
 
-  // 4. Title fuzzy match (Jaro-Winkler >= 0.9) -> 0.4
+  // 5. Title fuzzy match (Jaro-Winkler >= 0.9) -> 0.4
   const title = titleFromPath(note.path).toLowerCase();
   let best: { slug: string; score: number } | null = null;
   for (const project of projects) {

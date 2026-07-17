@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { computeAssociation, titleFromPath } from "../lib/note-association/associator-core.js";
 import { buildProjectDirectory, type PortfolioSeedEntry } from "../lib/note-association/project-directory.js";
+import { extractNoteTags } from "../lib/note-association/associate.js";
 
 const VAULT_ROOT = "/home/ubuntu/llm_shared/Obsidian";
 const NOW = new Date("2026-07-10T00:00:00.000Z");
@@ -177,5 +178,121 @@ describe("computeAssociation — rule precedence", () => {
       NOW,
     );
     expect(result).toMatchObject({ projectId: "ndis", confidence: 1.0, method: "override" });
+  });
+});
+
+describe("computeAssociation — tag rule (T-2.3-tag)", () => {
+  // computeAssociation consumes the already-extracted `tags` field (associate.ts's
+  // extractNoteTags does the frontmatter->tags work; see the extractNoteTags suite).
+  it("rule 3: a note tagged with the project slug, outside 10_Builds, associates at 0.75", () => {
+    const result = computeAssociation(
+      { path: "00_Inbox/some-research.md", frontmatter: null, wikilinks: [], tags: ["circlo"] },
+      PROJECTS,
+      {},
+      NOW,
+    );
+    expect(result).toMatchObject({ projectId: "circlo", confidence: 0.75, method: "tag" });
+  });
+
+  it("tag (0.75) outranks wikilink-hub (0.6): a note with both takes the tag's project", () => {
+    const result = computeAssociation(
+      { path: "00_Inbox/note.md", frontmatter: null, wikilinks: ["BRM_philosophy"], tags: ["hometrics"] },
+      PROJECTS,
+      {},
+      NOW,
+    );
+    expect(result).toMatchObject({ projectId: "hometrics", confidence: 0.75, method: "tag" });
+  });
+
+  it("path-prefix (0.85) outranks tag (0.75): a Circlo-folder note tagged 'hometrics' stays Circlo", () => {
+    const result = computeAssociation(
+      { path: "10_Builds/Circlo/note.md", frontmatter: null, wikilinks: [], tags: ["hometrics"] },
+      PROJECTS,
+      {},
+      NOW,
+    );
+    expect(result).toMatchObject({ projectId: "circlo", confidence: 0.85, method: "path-prefix" });
+  });
+
+  it("tag matching is case-insensitive", () => {
+    const result = computeAssociation(
+      { path: "00_Inbox/note.md", frontmatter: null, wikilinks: [], tags: ["CIRCLO"] },
+      PROJECTS,
+      {},
+      NOW,
+    );
+    expect(result).toMatchObject({ projectId: "circlo", method: "tag" });
+  });
+
+  it("an unrelated tag does not associate", () => {
+    const result = computeAssociation(
+      { path: "00_Inbox/note.md", frontmatter: null, wikilinks: [], tags: ["random-topic"] },
+      PROJECTS,
+      {},
+      NOW,
+    );
+    expect(result.projectId).toBeNull();
+  });
+
+  it("explicit seed `tags` override the slug default", () => {
+    const projects = buildProjectDirectory(
+      [
+        {
+          slug: "business-model-analysis",
+          name: "Business Model Analysis",
+          obsidianFolder: null,
+          visionRefs: [],
+          tags: ["bma"],
+        },
+      ],
+      VAULT_ROOT,
+    );
+    const hit = computeAssociation(
+      { path: "00_Inbox/note.md", frontmatter: null, wikilinks: [], tags: ["bma"] },
+      projects,
+      {},
+      NOW,
+    );
+    expect(hit).toMatchObject({ projectId: "business-model-analysis", confidence: 0.75, method: "tag" });
+    // the slug no longer matches because the explicit tags replaced the default
+    const miss = computeAssociation(
+      { path: "00_Inbox/note.md", frontmatter: null, wikilinks: [], tags: ["business-model-analysis"] },
+      projects,
+      {},
+      NOW,
+    );
+    expect(miss.projectId).toBeNull();
+  });
+});
+
+describe("buildProjectDirectory — matchTags (T-2.3-tag)", () => {
+  it("defaults matchTags to [slug] when the seed has no tags", () => {
+    const circlo = PROJECTS.find((p) => p.slug === "circlo");
+    expect(circlo?.matchTags).toEqual(["circlo"]);
+  });
+
+  it("uses explicit seed tags, lowercased + deduped", () => {
+    const [project] = buildProjectDirectory(
+      [{ slug: "x", name: "X", obsidianFolder: null, visionRefs: [], tags: ["BMA", "bma", "Strategy"] }],
+      VAULT_ROOT,
+    );
+    expect(project.matchTags).toEqual(["bma", "strategy"]);
+  });
+});
+
+describe("extractNoteTags (T-2.3-tag)", () => {
+  it("handles the YAML list, scalar, and inline-bracket forms", () => {
+    expect(extractNoteTags({ tags: ["circlo", "ndis"] })).toEqual(["circlo", "ndis"]);
+    expect(extractNoteTags({ tags: "circlo" })).toEqual(["circlo"]);
+    expect(extractNoteTags({ tags: "[circlo, ndis]" })).toEqual(["circlo", "ndis"]);
+  });
+
+  it("lowercases, trims, dedupes, drops empties", () => {
+    expect(extractNoteTags({ tags: [" Circlo ", "", "circlo", "NDIS"] })).toEqual(["circlo", "ndis"]);
+  });
+
+  it("returns [] when there are no tags", () => {
+    expect(extractNoteTags(null)).toEqual([]);
+    expect(extractNoteTags({})).toEqual([]);
   });
 });

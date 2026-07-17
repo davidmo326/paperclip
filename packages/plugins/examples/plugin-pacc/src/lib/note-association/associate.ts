@@ -25,6 +25,38 @@ export interface SourceIndexReader {
   } | null>;
 }
 
+/**
+ * Normalised note tags (T-2.3-tag) from frontmatter `tags`. Obsidian permits
+ * a YAML list (`tags:\n  - x`), a scalar (`tags: x`), or an inline bracket
+ * form (`tags: [x, y]`); the source-index's flat-YAML parser handles the list
+ * and scalar but leaves inline brackets as a literal string, so split those
+ * here. Lowercased + trimmed to match `ProjectDef.matchTags`.
+ *
+ * Inline body `#tag`s are NOT captured here — the stored source-index record
+ * has no body. Surfacing those needs a source-index change (persist body or
+ * extract hashtags at index time); filed as a deferred follow-up.
+ */
+export function extractNoteTags(frontmatter: Record<string, string | string[]> | null): string[] {
+  const raw = frontmatter?.tags;
+  if (raw == null) return [];
+  const asList: string[] = Array.isArray(raw)
+    ? raw
+    : String(raw)
+        .replace(/^\[/, "")
+        .replace(/\]$/, "")
+        .split(",")
+        .map((part) => part.trim());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of asList) {
+    const normalised = tag.toLowerCase().trim();
+    if (normalised.length === 0 || seen.has(normalised)) continue;
+    seen.add(normalised);
+    out.push(normalised);
+  }
+  return out;
+}
+
 export interface NoteAssociationDeps {
   sourceIndex: SourceIndexReader;
   store: NoteAssociationStore;
@@ -62,7 +94,7 @@ export async function runAssociation(deps: NoteAssociationDeps): Promise<Associa
       continue;
     }
     const record = computeAssociation(
-      { path: indexed.path, frontmatter: indexed.frontmatter, wikilinks: indexed.wikilinks },
+      { path: indexed.path, frontmatter: indexed.frontmatter, wikilinks: indexed.wikilinks, tags: extractNoteTags(indexed.frontmatter) },
       deps.projects,
       deps.overrides,
       now,
@@ -90,7 +122,7 @@ export async function applyNoteAssociation(
   const indexed = await deps.sourceIndex.getByPath(path);
   if (!indexed) return null;
   const record = computeAssociation(
-    { path: indexed.path, frontmatter: indexed.frontmatter, wikilinks: indexed.wikilinks },
+    { path: indexed.path, frontmatter: indexed.frontmatter, wikilinks: indexed.wikilinks, tags: extractNoteTags(indexed.frontmatter) },
     deps.projects,
     deps.overrides,
     deps.now?.() ?? new Date(),

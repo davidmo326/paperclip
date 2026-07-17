@@ -16,6 +16,13 @@ export interface PortfolioSeedEntry {
   name: string;
   obsidianFolder: string | null;
   visionRefs: string[];
+  /**
+   * Optional explicit vault tag(s) for this project (T-2.3-tag). When absent,
+   * the project matches notes tagged with its `slug`. Principal-curated in
+   * `portfolio-seed.json` for projects whose tag convention isn't the slug
+   * (e.g. an abbreviation). Normalised to lowercase by `buildProjectDirectory`.
+   */
+  tags?: string[];
 }
 
 export interface ProjectDef {
@@ -30,11 +37,19 @@ export interface ProjectDef {
   /**
    * Hub-note names exactly as they appear inside `[[wikilinks]]` — i.e.
    * `visionRefs` with the `[[` `]]` wrapper stripped. These are the notes
-   * PLAN's rule 3 calls "a known project hub note": principal-curated
+   * PLAN's rule 4 calls "a known project hub note": principal-curated
    * vision/strategy notes for the project (T-0.4's `visionRefs` field is
    * the closest existing signal for "this note anchors the project").
    */
   hubNoteNames: string[];
+  /**
+   * Lowercased tag(s) this project matches on (T-2.3-tag, associator rule 3).
+   * Defaults to `[slug]`; an explicit seed `tags` entry overrides. A note
+   * whose frontmatter `tags` intersects this set associates at 0.75 — the
+   * primary discovery channel for project docs that live outside the
+   * `10_Builds/<folder>` path prefix.
+   */
+  matchTags: string[];
 }
 
 const WIKILINK_WRAPPER = /^\[\[([^\]|#]+?)(?:[|#][^\]]*)?\]\]$/;
@@ -42,6 +57,19 @@ const WIKILINK_WRAPPER = /^\[\[([^\]|#]+?)(?:[|#][^\]]*)?\]\]$/;
 function stripWikilinkWrapper(ref: string): string {
   const match = WIKILINK_WRAPPER.exec(ref.trim());
   return match ? match[1]!.trim() : ref.trim();
+}
+
+/** Lowercase, trim, dedupe, drop empties — the canonical tag comparison form. */
+function normalizeTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of tags) {
+    const tag = raw.toLowerCase().trim();
+    if (tag.length === 0 || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+  }
+  return out;
 }
 
 /** Vault-relative, forward-slash-normalized form of an absolute path under vaultRoot. */
@@ -59,5 +87,6 @@ export function buildProjectDirectory(
     name: entry.name,
     folderRelPath: entry.obsidianFolder ? toVaultRelative(vaultRoot, entry.obsidianFolder) : null,
     hubNoteNames: entry.visionRefs.map(stripWikilinkWrapper).filter((n) => n.length > 0),
+    matchTags: normalizeTags(entry.tags && entry.tags.length > 0 ? entry.tags : [entry.slug]),
   }));
 }
