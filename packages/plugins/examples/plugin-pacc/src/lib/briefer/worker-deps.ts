@@ -73,6 +73,7 @@ import {
 import type { CaptureFeedbackDeps } from "./capture-feedback.js";
 import type { BriefFeedbackRow } from "./feedback.js";
 import type { SourceRef } from "@paperclipai/shared";
+import type { SourceIndexRecord } from "../source-index/index-core.js";
 import { makeSourceIndexStore } from "../source-index/worker-deps.js";
 import { makeNoteAssociationStore, defaultPortfolioSeedPath } from "../note-association/worker-deps.js";
 import { createNoteAssociationFsDeps } from "../note-association/fs-deps.js";
@@ -293,12 +294,23 @@ export function makeCaptureFeedbackDeps(ctx: WorkerCtx): CaptureFeedbackDeps {
 // ---------------------------------------------------------------------------
 
 /**
+ * Max associated M1a notes surfaced per project in the brief. The full set
+ * stays in the source index (queryable); the brief only needs a recent,
+ * readable sample to ground the next action + Source Notes — without it,
+ * a project like Circlo (562 associated notes) floods a ~660-line brief that's
+ * pure path dump. Most-recent-first (file mtime) keeps the relevant signal.
+ */
+const ASSOCIATED_NOTE_REF_CAP_PER_PROJECT = 8;
+
+/**
  * T-2.10: build slug -> associated M1a SourceRef[] from the grounding pipeline
  * (note-association catalog -> source-index records). Catalog entries are
  * grouped by their seed-slug projectId, each path resolved to a record
- * (path + contentHash), and the per-slug list sorted by path so cards stay
- * deterministic. Vanished index records are skipped. An unreadable/empty
- * association store yields an empty map (brief degrades to M2-only — not fatal).
+ * (path + contentHash + modifiedAt), then the per-slug list is capped to the
+ * {@link ASSOCIATED_NOTE_REF_CAP_PER_PROJECT} most-recent (mtime desc, path asc
+ * tie-break) so cards stay readable AND deterministic. Vanished index records
+ * are skipped. An unreadable/empty association store yields an empty map
+ * (brief degrades to M2-only — not fatal).
  *
  * Firewall-clean: uses only the already-adapter-constructed stores built from
  * the same `ctx` (`Pick<WorkerCtx,"state"|"logger">`).
@@ -321,13 +333,22 @@ async function buildAssociatedNoteRefsBySlug(ctx: WorkerCtx): Promise<Map<string
   }
   const out = new Map<string, SourceRef[]>();
   for (const [slug, paths] of pathsBySlug) {
-    const records = await Promise.all([...paths].sort().map((p) => indexStore.getByPath(p)));
-    const refs: SourceRef[] = [];
-    for (const r of records) {
-      if (!r) continue;
-      refs.push({ kind: "M1a", path: r.path, hash: r.contentHash, capturedAt: r.lastIndexedAt });
-    }
-    out.set(slug, refs);
+    const records = (await Promise.all([...paths].sort().map((p) => indexStore.getByPath(p)))).filter(
+      (r): r is SourceIndexRecord => r !== null,
+    );
+    records.sort((a, b) => {
+      if (a.modifiedAt !== b.modifiedAt) return a.modifiedAt < b.modifiedAt ? 1 : -1;
+      return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+    });
+    out.set(
+      slug,
+      records.slice(0, ASSOCIATED_NOTE_REF_CAP_PER_PROJECT).map((r) => ({
+        kind: "M1a",
+        path: r.path,
+        hash: r.contentHash,
+        capturedAt: r.lastIndexedAt,
+      })),
+    );
   }
   return out;
 }
