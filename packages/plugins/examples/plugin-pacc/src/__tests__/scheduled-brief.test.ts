@@ -125,7 +125,7 @@ function projectInputWithSourceRefs(projectId: string, paths: string[]): Briefer
       sourceRefs: [
         ...card.sourceRefs,
         ...paths.map((path) => ({
-          kind: "m1a",
+          kind: "M1a" as const,
           path,
           hash: "deadbeef",
           capturedAt: NOW.toISOString(),
