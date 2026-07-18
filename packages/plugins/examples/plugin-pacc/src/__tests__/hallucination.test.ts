@@ -139,6 +139,46 @@ describe("detectHallucinations — known-list matching", () => {
     expect(flags).toEqual([]);
   });
 
+  it("does not flag slug tokens that occur inside a cited source path (T-3.7-sourcerefs)", () => {
+    const path = "10_Builds/Circlo/custodian-log.md";
+    const flags = detectHallucinations({
+      briefMarkdown: `## Source Notes\n\n- **Circlo**: \`${path}\`\n`,
+      knownIds: new Set(),
+      sourcePaths: [path],
+    });
+    expect(flags).toEqual([]);
+  });
+
+  it("grounds the trailing-hyphen date token from dated filenames (T-3.7-sourcerefs)", () => {
+    const path = "10_Builds/Hometrics/2026-04-21-Grants-inventory-table.md";
+    const flags = detectHallucinations({
+      briefMarkdown: `- **Hometrics**: \`${path}\`\n`,
+      knownIds: new Set(),
+      sourcePaths: [path],
+    });
+    // Without sourcePaths this path yields "2026-04-21-" and "inventory-table".
+    expect(flags).toEqual([]);
+  });
+
+  it("still flags unknown slugs outside the source paths", () => {
+    const flags = detectHallucinations({
+      briefMarkdown:
+        "See `10_Builds/Circlo/custodian-log.md` — also phantom-project needs review.",
+      knownIds: new Set(),
+      sourcePaths: ["10_Builds/Circlo/custodian-log.md"],
+    });
+    expect(flags.map((f) => f.reference)).toEqual(["phantom-project"]);
+  });
+
+  it("matches source-path tokens case-insensitively", () => {
+    const flags = detectHallucinations({
+      briefMarkdown: "grounded by custodian-log evidence",
+      knownIds: new Set(),
+      sourcePaths: ["10_Builds/Circlo/CUSTODIAN-LOG.md"],
+    });
+    expect(flags).toEqual([]);
+  });
+
   it("includes a contextual excerpt with each flag", () => {
     const flags = detectHallucinations({
       briefMarkdown:

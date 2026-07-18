@@ -288,9 +288,21 @@ export async function runScheduledBrief(
     let selfPaused = false;
     if (deps.hallucination) {
       const modelGenerated = !(options.brieferOptions?.skipModel ?? false);
+      // T-3.7-sourcerefs: real M1a paths the brief cites (Source Notes +
+      // per-action sourceRefs) are grounded by construction — slug-shaped
+      // tokens inside them must not count as hallucinations.
+      const sourcePaths = [
+        ...brief.sourceNotes.map((s) => s.path),
+        ...[
+          ...(brief.recommendedFocus ? [brief.recommendedFocus] : []),
+          ...brief.highLeverageActions,
+          ...brief.backlogCandidates,
+        ].flatMap((a) => a.sourceRefs.map((r) => r.path)),
+      ];
       const flags = detectHallucinations({
         briefMarkdown: markdown,
         knownIds: deps.hallucination.knownIds,
+        sourcePaths,
       });
       hallucinationFlagCount = flags.length;
       if (flags.length > 0) {

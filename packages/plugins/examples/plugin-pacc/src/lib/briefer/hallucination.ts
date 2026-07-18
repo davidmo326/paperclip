@@ -102,6 +102,15 @@ export interface DetectHallucinationsInput {
    * Compared case-insensitively.
    */
   allowList?: ReadonlySet<string>;
+  /**
+   * Vault paths the brief legitimately cites (T-2.10 Source Notes /
+   * sourceRefs). Any ID-shaped token that occurs inside one of these paths
+   * is grounded by construction — hyphenated filenames like
+   * `custodian-log.md` or `2026-04-21-Grants-inventory-table.md` are slug-
+   * shaped but are real M1a references, not hallucinations
+   * (T-3.7-sourcerefs).
+   */
+  sourcePaths?: readonly string[];
 }
 
 const DEFAULT_ALLOW_LIST = new Set<string>([
@@ -133,6 +142,9 @@ export function detectHallucinations(
   const allowList = input.allowList ?? DEFAULT_ALLOW_LIST;
   const knownLc = new Set([...input.knownIds].map((s) => s.toLowerCase()));
   const allowLc = new Set([...allowList].map((s) => s.toLowerCase()));
+  // A token is grounded when it occurs verbatim (case-insensitive) inside a
+  // real cited path — hyphenated filename fragments, dated prefixes, etc.
+  const sourcePathsLc = (input.sourcePaths ?? []).map((p) => p.toLowerCase());
 
   const flags: HallucinationFlag[] = [];
   const tokens = extractIdLikeTokens(input.briefMarkdown);
@@ -140,6 +152,7 @@ export function detectHallucinations(
   for (const ref of tokens) {
     const lc = ref.toLowerCase();
     if (knownLc.has(lc) || allowLc.has(lc)) continue;
+    if (sourcePathsLc.some((p) => p.includes(lc))) continue;
     flags.push({
       reference: ref,
       kind: looksLikeUuid(ref) ? "uuid" : "slug",

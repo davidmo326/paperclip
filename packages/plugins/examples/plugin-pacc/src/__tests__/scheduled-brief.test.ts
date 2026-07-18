@@ -113,6 +113,28 @@ function projectInputWithAction(projectId: string, actionText: string): BrieferP
   };
 }
 
+/** A project card citing real M1a source paths — proves path-derived slug
+ * tokens are grounded, never flagged (T-3.7-sourcerefs). */
+function projectInputWithSourceRefs(projectId: string, paths: string[]): BrieferProjectInput {
+  const card = makeCard(projectId);
+  return {
+    projectId,
+    projectName: `P-${projectId}`,
+    card: {
+      ...card,
+      sourceRefs: [
+        ...card.sourceRefs,
+        ...paths.map((path) => ({
+          kind: "m1a",
+          path,
+          hash: "deadbeef",
+          capturedAt: NOW.toISOString(),
+        })),
+      ],
+    },
+  };
+}
+
 interface MockBriefer {
   projects: BrieferProjectInput[];
   savedBriefs: Brief[];
@@ -508,6 +530,36 @@ describe("runScheduledBrief — hallucination tripwire (D-39)", () => {
         const written = await readFile(result.obsidianWrite.path, "utf8");
         expect(written).toContain(`${refs[i]} _(hallucinated reference)_`);
       }
+    }
+    expect(hallucination.paused.paused).toBe(false);
+  });
+
+  it("hyphenated real source-note paths never flag or pause a model brief (T-3.7-sourcerefs)", async () => {
+    const hallucination = new InMemoryHallucination();
+    // The three false-positive shapes surfaced live on 2026-07-18: a
+    // hyphenated filename, a dated prefix (extracts "2026-04-21-"), and a
+    // long hyphenated fragment ("to-pursue-for-care-tech-pilots") — ≥3
+    // unique refs, which pre-fix would have paused a model brief.
+    const paths = [
+      "10_Builds/Circlo/custodian-log.md",
+      "10_Builds/Hometrics/2026-04-21-Grants-inventory-table.md",
+      "10_Builds/Hometrics/2026-04-21-Grants-to-pursue-for-care-tech-pilots.md",
+    ];
+    state.briefer.projects = [projectInputWithSourceRefs("p-1", paths)];
+    const deps: ScheduledBriefDeps = { ...makeDeps(state), hallucination };
+    const result = await runScheduledBrief(deps, {
+      now: NOW,
+      runId: "run-sourcerefs",
+      obsidianBaseDir: workdir,
+      brieferOptions: { skipModel: false },
+    });
+    expect(result.kind).toBe("completed");
+    if (result.kind === "completed") {
+      expect(result.hallucinationFlagCount).toBe(0);
+      expect(result.selfPaused).toBe(false);
+      const written = await readFile(result.obsidianWrite.path, "utf8");
+      expect(written).toContain("custodian-log");
+      expect(written).not.toContain("hallucinated reference");
     }
     expect(hallucination.paused.paused).toBe(false);
   });
