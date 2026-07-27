@@ -15,6 +15,8 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   loadValueAnchors,
+  parseValueAnchorCitation,
+  validateValueAnchorCitation,
   valueAnchorCite,
   type ValueAnchorLoaderDeps,
 } from "../lib/value-anchor/loader.js";
@@ -178,5 +180,48 @@ Distribution content.
 
   it("throws for a missing section heading", () => {
     expect(() => valueAnchorCite("N", NOTE, "No Such Section")).toThrow(/section/i);
+  });
+});
+
+describe("validateValueAnchorCitation (T-2.10 Part B)", () => {
+  const anchors = new Set([
+    "the three jobs of a solo entrepreneur",
+    "zone 2 entrepreneurship",
+  ]);
+
+  it("accepts a well-formed citation whose name is registered (case-insensitive)", () => {
+    const cite = "[[The Three Jobs of a Solo Entrepreneur]] § Job 1 boundary rule @ a3f9c2d1";
+    expect(validateValueAnchorCitation(cite, anchors)).toEqual({ valid: true });
+  });
+
+  it("rejects a name that isn't a registered anchor", () => {
+    const cite = "[[Some Made-Up Anchor]] § Section @ a3f9c2d1";
+    const r = validateValueAnchorCitation(cite, anchors);
+    expect(r.valid).toBe(false);
+    expect(r.valid === false && r.reason).toMatch(/not a registered value anchor/);
+  });
+
+  it("rejects citations missing the section or hash", () => {
+    expect(validateValueAnchorCitation("[[Zone 2 entrepreneurship]]", anchors).valid).toBe(false);
+    expect(validateValueAnchorCitation("[[Zone 2 entrepreneurship]] § Litmus tests", anchors).valid).toBe(false);
+  });
+
+  it("rejects a hash that isn't exactly 8 hex chars", () => {
+    expect(
+      validateValueAnchorCitation("[[Zone 2 entrepreneurship]] § S @ a3f9c2d100", anchors).valid,
+    ).toBe(false); // 10 chars
+    expect(
+      validateValueAnchorCitation("[[Zone 2 entrepreneurship]] § S @ zzzzzzzz", anchors).valid,
+    ).toBe(false); // non-hex
+  });
+
+  it("accepts sub-section syntax (›) in the section", () => {
+    const cite = "[[Zone 2 entrepreneurship]] § Weekly ritual › Did I build for return @ 7e8b1934";
+    expect(validateValueAnchorCitation(cite, anchors)).toEqual({ valid: true });
+  });
+
+  it("parseValueAnchorCitation returns null for non-citations", () => {
+    expect(parseValueAnchorCitation("per the principal's values")).toBeNull();
+    expect(parseValueAnchorCitation("[[Value Anchors]] § The three jobs")).toBeNull();
   });
 });

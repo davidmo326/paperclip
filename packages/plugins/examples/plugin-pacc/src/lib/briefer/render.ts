@@ -65,6 +65,24 @@ export function renderBriefMarkdown(
   }
   out.push("");
 
+  // -- Value Anchors (M1b, T-2.10 Part B) ------------------------------------
+  // Portfolio-level context: the principal's value anchors, cited via
+  // [[Name]] § Section @ hash8 (docs/value-anchor-citation-format.md). Rendered
+  // only when non-empty; sorted by name for deterministic output.
+  const anchors = [...(brief.valueAnchors ?? [])].sort((a, b) =>
+    a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0,
+  );
+  if (anchors.length > 0) {
+    out.push("## Value Anchors");
+    out.push("");
+    for (const a of anchors) {
+      const purpose = a.purpose ? ` — ${a.purpose}` : "";
+      const mark = a.resolved ? "" : " _(unresolved)_";
+      out.push(`- [[${a.name}]]${purpose}${mark}`);
+    }
+    out.push("");
+  }
+
   // -- Job Mix ---------------------------------------------------------------
   out.push("## Job Mix");
   out.push("");

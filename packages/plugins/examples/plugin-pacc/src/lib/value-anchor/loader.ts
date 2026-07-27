@@ -157,6 +157,55 @@ export function valueAnchorCite(
   return `[[${noteName}]] § ${sectionHeading} @ ${hash8}`;
 }
 
+const CITE_PATTERN = /^\[\[([^\]|#]+?)\]\]\s*§\s*(.+?)\s*@\s*([0-9a-f]{8})$/;
+
+export interface ParsedValueAnchorCitation {
+  name: string;
+  section: string;
+  /** Exactly 8 hex chars. */
+  hash8: string;
+}
+
+/**
+ * Parse a `[[Name]] § Section @ hash8` citation. Returns null if the string
+ * isn't that shape (used by {@link validateValueAnchorCitation} and by tests).
+ */
+export function parseValueAnchorCitation(citation: string): ParsedValueAnchorCitation | null {
+  const match = CITE_PATTERN.exec(citation.trim());
+  if (!match) return null;
+  return { name: match[1]!.trim(), section: match[2]!.trim(), hash8: match[3]! };
+}
+
+/**
+ * Validate a value-anchor citation against the registry (PRD § 9.6, format
+ * pinned in ControlPlane/docs/value-anchor-citation-format.md):
+ *   - structure: `[[Name]] § Section @ hash8` (exactly 8 hex chars; non-empty
+ *     section; rejects the registry note itself, 9+ char hashes, missing parts)
+ *   - membership: Name must be a registered value anchor (case-insensitive)
+ *
+ * This is the deterministic half of tripwire 1's value-anchor rule — used to
+ * reject vague/fabricated value claims ("this aligns with the principal's
+ * values" with no citation). It validates STRUCTURE + membership, NOT that the
+ * hash matches the note's current content (that's freshness/tripwire 2, which
+ * re-hashes the cited section).
+ */
+export function validateValueAnchorCitation(
+  citation: string,
+  anchorNames: ReadonlySet<string>,
+): { valid: true } | { valid: false; reason: string } {
+  const parsed = parseValueAnchorCitation(citation);
+  if (!parsed) {
+    return { valid: false, reason: "citation is not in `[[Name]] § Section @ hash8` format" };
+  }
+  if (parsed.section.length === 0) {
+    return { valid: false, reason: "citation section is empty" };
+  }
+  if (!anchorNames.has(parsed.name.toLowerCase())) {
+    return { valid: false, reason: `\`[[${parsed.name}]]\` is not a registered value anchor` };
+  }
+  return { valid: true };
+}
+
 /**
  * Returns the body of the first heading whose text matches, or null.
  * Body = lines after the heading up to the next heading of equal or

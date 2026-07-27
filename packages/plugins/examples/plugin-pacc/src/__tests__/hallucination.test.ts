@@ -179,6 +179,26 @@ describe("detectHallucinations — known-list matching", () => {
     expect(flags).toEqual([]);
   });
 
+  it("T-2.10 Part B: grounds slug tokens inside value-anchor names + purposes (groundingPhrases)", () => {
+    // "Zone-2-entrepreneurship" / "three-jobs" would otherwise be slug-shaped flags.
+    const flags = detectHallucinations({
+      briefMarkdown:
+        "## Value Anchors\n\n- [[Zone 2 entrepreneurship]] — operating discipline\n- [[The three jobs of a solo entrepreneur]] — priority hierarchy",
+      knownIds: new Set(),
+      groundingPhrases: ["Zone 2 entrepreneurship", "The three jobs of a solo entrepreneur"],
+    });
+    expect(flags).toEqual([]);
+  });
+
+  it("still flags an unknown slug even when groundingPhrases are present", () => {
+    const flags = detectHallucinations({
+      briefMarkdown: "## Value Anchors\n\n- [[Zone 2 entrepreneurship]] — see also phantom-project",
+      knownIds: new Set(),
+      groundingPhrases: ["Zone 2 entrepreneurship"],
+    });
+    expect(flags.map((f) => f.reference)).toEqual(["phantom-project"]);
+  });
+
   it("includes a contextual excerpt with each flag", () => {
     const flags = detectHallucinations({
       briefMarkdown:

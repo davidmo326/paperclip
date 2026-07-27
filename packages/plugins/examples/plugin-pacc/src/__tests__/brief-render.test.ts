@@ -397,3 +397,47 @@ describe("renderBriefMarkdown — idempotence", () => {
     expect(md).toContain("- Approved actions: a-action, m-action, z-action");
   });
 });
+
+describe("renderBriefMarkdown — Value Anchors section (T-2.10 Part B)", () => {
+  it("renders the M1b registry sorted by name, with purpose + unresolved mark", () => {
+    const brief = emptyBrief({
+      valueAnchors: [
+        { name: "Zone 2 entrepreneurship", purpose: "operating discipline", resolved: true },
+        { name: "The three jobs of a solo entrepreneur", purpose: "priority hierarchy", resolved: true },
+        { name: "Missing Anchor", purpose: "", resolved: false },
+      ],
+    });
+    const md = renderBriefMarkdown(brief);
+    expect(md).toContain("## Value Anchors");
+    // Sorted by name (lowercased): "the three jobs…" < "missing anchor"? — by lowercase: 'm' < 't' < 'z'
+    // → Missing Anchor, The three jobs…, Zone 2 entrepreneurship
+    const iMissing = md.indexOf("[[Missing Anchor]]");
+    const iThree = md.indexOf("[[The three jobs of a solo entrepreneur]]");
+    const iZone = md.indexOf("[[Zone 2 entrepreneurship]]");
+    expect(iMissing).toBeLessThan(iThree);
+    expect(iThree).toBeLessThan(iZone);
+    expect(md).toContain("— priority hierarchy");
+    expect(md).toContain("_(unresolved)_");
+  });
+
+  it("omits the Value Anchors section when the registry is empty (back-compat)", () => {
+    const md = renderBriefMarkdown(emptyBrief());
+    expect(md).not.toContain("## Value Anchors");
+  });
+
+  it("is byte-identical for the same anchors in any input order", () => {
+    const a = emptyBrief({
+      valueAnchors: [
+        { name: "Zone 2 entrepreneurship", purpose: "x", resolved: true },
+        { name: "Anchor One", purpose: "y", resolved: true },
+      ],
+    });
+    const b = emptyBrief({
+      valueAnchors: [
+        { name: "Anchor One", purpose: "y", resolved: true },
+        { name: "Zone 2 entrepreneurship", purpose: "x", resolved: true },
+      ],
+    });
+    expect(renderBriefMarkdown(a)).toBe(renderBriefMarkdown(b));
+  });
+});

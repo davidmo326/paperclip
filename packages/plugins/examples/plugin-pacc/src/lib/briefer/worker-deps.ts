@@ -45,7 +45,7 @@ import { buildContextCard, type ContextCard } from "../context-card.js";
 import type { ProjectFreshnessRecord } from "../../jobs/stale-rehash.js";
 import type { ProjectDecayRecord } from "../../jobs/source-decay-check.js";
 import type { ProjectConflictsState } from "../conflict.js";
-import type { Brief, BrieferDeps, BrieferProjectInput } from "./types.js";
+import type { Brief, BrieferDeps, BrieferProjectInput, ValueAnchorSummary } from "./types.js";
 import type { OverlapGuardStore, BriefInProgressLock } from "./overlap-guard.js";
 import {
   auditRowsFromSightings,
@@ -426,9 +426,25 @@ export function makeBrieferDeps(
   cards: BrieferProjectInput[],
   callModel?: BrieferDeps["callModel"],
 ): BrieferDeps {
+  // T-2.10 Part B: cache the value-anchor registry per run so the brief (and
+  // repeated renders) don't re-read the vault note each call.
+  let anchorCache: ValueAnchorSummary[] | null = null;
   return {
     async listActiveProjectCards() {
       return cards;
+    },
+    async listValueAnchors() {
+      if (anchorCache) return anchorCache;
+      try {
+        const service = createValueAnchorService({ vaultRoot: resolveVaultRoot() });
+        await service.reload();
+        anchorCache = service
+          .getValueAnchors()
+          .map((a) => ({ name: a.name, purpose: a.purpose, resolved: a.resolved }));
+      } catch {
+        anchorCache = [];
+      }
+      return anchorCache;
     },
     async proposeM2() {
       // Briefer is L1 — it proposes, never writes M2. The actual candidate

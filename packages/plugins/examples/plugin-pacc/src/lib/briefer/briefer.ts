@@ -164,6 +164,8 @@ export async function runBriefer(
     { now },
   );
 
+  const valueAnchors = (await deps.listValueAnchors?.()) ?? [];
+
   const brief: Brief = {
     generatedAt: now.toISOString(),
     briefDate,
@@ -181,6 +183,7 @@ export async function runBriefer(
     completedWork: [],
     authoritySafetyIssues: [],
     sourceNotes,
+    valueAnchors,
     jobMix,
     projectNames,
     humanFeedback: {

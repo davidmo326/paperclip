@@ -111,6 +111,15 @@ export interface DetectHallucinationsInput {
    * (T-3.7-sourcerefs).
    */
   sourcePaths?: readonly string[];
+  /**
+   * Authoritative M1b phrases (T-2.10 Part B): value-anchor names + purposes
+   * rendered in the brief's Value Anchors section. Any ID-shaped token that
+   * occurs verbatim inside one of these is grounded — anchor prose legitimately
+   * contains slug-shaped hyphenated terms (e.g. "Zone 2 entrepreneurship") that
+   * are real references, not hallucinations. Same substring semantics as
+   * {@link sourcePaths}.
+   */
+  groundingPhrases?: readonly string[];
 }
 
 const DEFAULT_ALLOW_LIST = new Set<string>([
@@ -145,6 +154,9 @@ export function detectHallucinations(
   // A token is grounded when it occurs verbatim (case-insensitive) inside a
   // real cited path — hyphenated filename fragments, dated prefixes, etc.
   const sourcePathsLc = (input.sourcePaths ?? []).map((p) => p.toLowerCase());
+  // T-2.10 Part B: same for authoritative M1b phrases (value-anchor names +
+  // purposes) so anchor prose doesn't false-trigger the detector.
+  const groundingPhrasesLc = (input.groundingPhrases ?? []).map((p) => p.toLowerCase());
 
   const flags: HallucinationFlag[] = [];
   const tokens = extractIdLikeTokens(input.briefMarkdown);
@@ -153,6 +165,7 @@ export function detectHallucinations(
     const lc = ref.toLowerCase();
     if (knownLc.has(lc) || allowLc.has(lc)) continue;
     if (sourcePathsLc.some((p) => p.includes(lc))) continue;
+    if (groundingPhrasesLc.some((p) => p.includes(lc))) continue;
     flags.push({
       reference: ref,
       kind: looksLikeUuid(ref) ? "uuid" : "slug",

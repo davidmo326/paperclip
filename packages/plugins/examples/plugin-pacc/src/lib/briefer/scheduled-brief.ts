@@ -299,10 +299,17 @@ export async function runScheduledBrief(
           ...brief.backlogCandidates,
         ].flatMap((a) => a.sourceRefs.map((r) => r.path)),
       ];
+      // T-2.10 Part B: value-anchor names + purposes (M1b) rendered in the
+      // Value Anchors section are authoritative — slug-shaped tokens inside
+      // them must not count as hallucinations.
+      const groundingPhrases = (brief.valueAnchors ?? []).flatMap((a) =>
+        [a.name, a.purpose].filter((s): s is string => typeof s === "string" && s.length > 0),
+      );
       const flags = detectHallucinations({
         briefMarkdown: markdown,
         knownIds: deps.hallucination.knownIds,
         sourcePaths,
+        groundingPhrases,
       });
       hallucinationFlagCount = flags.length;
       if (flags.length > 0) {

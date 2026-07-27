@@ -131,6 +131,14 @@ export interface Brief {
   authoritySafetyIssues: string[];
   /** Source notes — pointers into M1. */
   sourceNotes: Array<{ projectId: string; path: string }>;
+  /**
+   * T-2.10 Part B: the principal's value anchors (M1b registry) as portfolio-
+   * level context. Surfaced in every brief so the principal (and, when wired,
+   * the briefer model) can ground recommendations in them and cite them per
+   * `docs/value-anchor-citation-format.md`. Optional for back-compat with
+   * briefs persisted before this field existed.
+   */
+  valueAnchors?: ValueAnchorSummary[];
   /** Job-mix table (T-3.4). */
   jobMix: JobMixRow[];
   /**
@@ -147,6 +155,18 @@ export interface Brief {
   };
   /** Soft warnings the briefer wants the principal to see. */
   warnings: string[];
+}
+
+/**
+ * T-2.10 Part B: a portfolio-level value anchor (M1b) surfaced on the brief.
+ * Slim projection of the T-2.4 `ValueAnchor` — name + purpose + whether the
+ * note resolved — enough for the principal/model to reference and cite without
+ * leaking the loader's full type through the brief boundary.
+ */
+export interface ValueAnchorSummary {
+  name: string;
+  purpose: string;
+  resolved: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +216,13 @@ export interface BrieferDeps {
    * tier in T-2.x). Placeholder for forward compatibility.
    */
   readEpisodicSinceLastBrief?(): Promise<string | null>;
+
+  /**
+   * T-2.10 Part B: read-only access to the value-anchor registry (M1b) so the
+   * brief can surface the principal's values as portfolio-level context.
+   * Optional — when absent the brief renders with no Value Anchors section.
+   */
+  listValueAnchors?(): Promise<ValueAnchorSummary[]>;
 
   /**
    * L1 propose-only. Wraps the platform's proposeM2 with an L1 ceiling
