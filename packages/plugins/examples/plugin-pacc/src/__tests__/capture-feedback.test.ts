@@ -114,6 +114,7 @@ describe("captureBriefFeedback", () => {
       suggestionsCount: 1,
       acceptedCount: 0,
       j1CompletedCount: 2,
+      reachOrBypass: null,
     });
 
     const md = checkAction(renderBriefMarkdown(brief), "Email cohort A");

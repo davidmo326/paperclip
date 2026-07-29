@@ -469,6 +469,7 @@ describe("runScheduledBrief — kill-criterion wiring", () => {
       suggestionsCount: 99,
       acceptedCount: 3,
       j1CompletedCount: 2,
+      reachOrBypass: null,
     });
     const deps: ScheduledBriefDeps = { ...makeDeps(state), killCriterion: meter };
 

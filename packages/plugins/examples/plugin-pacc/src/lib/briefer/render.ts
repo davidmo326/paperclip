@@ -242,6 +242,8 @@ export function renderBriefMarkdown(
   out.push(`- Useful: ${renderTriBool(brief.humanFeedback.useful)}`);
   out.push(`- Wrong: ${brief.humanFeedback.wrong ?? ""}`);
   out.push(`- Changed priority: ${brief.humanFeedback.changedPriority ?? ""}`);
+  // T-3.14: H2 reach/bypass — edit to `acted-from-pacc` or `bypassed-to-cli`.
+  out.push(`- Today's next action: `);
   const approvedList = [...brief.humanFeedback.approvedActions].sort();
   out.push(
     `- Approved actions: ${approvedList.length === 0 ? "" : approvedList.join(", ")}`,

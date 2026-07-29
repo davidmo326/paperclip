@@ -132,6 +132,20 @@ describe("parseBriefFeedback — footer edit shapes", () => {
     const parsed = parseBriefFeedback(md);
     expect(parsed.approvedActions).toEqual(["Draft pricing page", "Email cohort A"]);
   });
+
+  it("T-3.14: parses Today's next action reach/bypass (canonical + short forms + blank)", () => {
+    expect(parseBriefFeedback("## Human Feedback\n- Today's next action: acted-from-pacc\n").reachOrBypass).toBe("acted-from-pacc");
+    expect(parseBriefFeedback("## Human Feedback\n- Today's next action: bypassed-to-cli\n").reachOrBypass).toBe("bypassed-to-cli");
+    expect(parseBriefFeedback("## Human Feedback\n- Today's next action: pacc\n").reachOrBypass).toBe("acted-from-pacc");
+    expect(parseBriefFeedback("## Human Feedback\n- Today's next action: cli\n").reachOrBypass).toBe("bypassed-to-cli");
+    expect(parseBriefFeedback("## Human Feedback\n- Today's next action: \n").reachOrBypass).toBeNull();
+    expect(parseBriefFeedback("## Human Feedback\n- Today's next action: gibberish\n").reachOrBypass).toBeNull();
+  });
+
+  it("T-3.14: reach/bypass is only read inside the Human Feedback section", () => {
+    const md = "## AI-Proposed Tasks\n- Today's next action: acted-from-pacc\n";
+    expect(parseBriefFeedback(md).reachOrBypass).toBeNull();
+  });
 });
 
 describe("deriveFeedbackOutcomes — task vs escalation", () => {

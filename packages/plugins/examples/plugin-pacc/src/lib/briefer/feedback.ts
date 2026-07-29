@@ -23,6 +23,14 @@ import type { Brief } from "./types.js";
 // Parsed shape
 // ---------------------------------------------------------------------------
 
+/**
+ * T-3.14: did the principal act on today's next action FROM pacc, or bypass
+ * pacc for the CLI/vault? The H2 signal that arms the § 0.5 freeze on the real
+ * anti-pattern (building a control plane that displaces, rather than drives,
+ * portfolio work) — not just brief usefulness.
+ */
+export type ReachOrBypass = "acted-from-pacc" | "bypassed-to-cli";
+
 export interface ParsedBriefFeedback {
   /** yes → true, no → false, blank/unrecognised → null. */
   useful: boolean | null;
@@ -30,6 +38,8 @@ export interface ParsedBriefFeedback {
   wrong: string | null;
   /** Free-text "changed priority" note, or null when blank. */
   changedPriority: string | null;
+  /** T-3.14: today's next action — acted from pacc, bypassed to CLI, or null. */
+  reachOrBypass: ReachOrBypass | null;
   /**
    * Union of (a) action summaries with a checked checkbox in AI-Proposed
    * Tasks and (b) summaries listed inline on the footer "Approved actions"
@@ -46,6 +56,8 @@ export interface BriefFeedbackRow {
   useful: boolean | null;
   wrong: string | null;
   changedPriority: string | null;
+  /** T-3.14. */
+  reachOrBypass: ReachOrBypass | null;
   approvedActions: string[];
   /** Convenience mirror of approvedActions.length — read by the kill-criterion meter (T-3.10). */
   acceptedCount: number;
@@ -83,12 +95,25 @@ const FOOTER_USEFUL_RE = /^-\s+Useful:\s*(.*)$/i;
 const FOOTER_WRONG_RE = /^-\s+Wrong:\s*(.*)$/i;
 const FOOTER_PRIORITY_RE = /^-\s+Changed priority:\s*(.*)$/i;
 const FOOTER_APPROVED_RE = /^-\s+Approved actions:\s*(.*)$/i;
+const FOOTER_REACH_RE = /^-\s+Today's next action:\s*(.*)$/i;
 
 function normaliseUseful(raw: string): boolean | null {
   const v = raw.trim().toLowerCase();
   if (v === "") return null;
   if (["yes", "y", "true", "✅", "[x]", "useful"].includes(v)) return true;
   if (["no", "n", "false", "❌", "[ ]", "not useful"].includes(v)) return false;
+  return null;
+}
+
+/**
+ * T-3.14: tolerate the principal writing either the canonical token or a
+ * short form (pacc / acted vs cli / bypassed). Unrecognised → null (no signal).
+ */
+function normaliseReachOrBypass(raw: string): ReachOrBypass | null {
+  const v = raw.trim().toLowerCase().replace(/^-\s+/, "").trim();
+  if (v === "") return null;
+  if (["acted-from-pacc", "pacc", "acted", "from-pacc", "yes"].includes(v)) return "acted-from-pacc";
+  if (["bypassed-to-cli", "bypassed", "cli", "bypass", "no"].includes(v)) return "bypassed-to-cli";
   return null;
 }
 
@@ -119,6 +144,7 @@ export function parseBriefFeedback(markdown: string): ParsedBriefFeedback {
   let useful: boolean | null = null;
   let wrong: string | null = null;
   let changedPriority: string | null = null;
+  let reachOrBypass: ReachOrBypass | null = null;
 
   for (const line of lines) {
     const sectionMatch = SECTION_RE.exec(line.trim());
@@ -154,6 +180,11 @@ export function parseBriefFeedback(markdown: string): ParsedBriefFeedback {
         changedPriority = blankToNull(p[1]);
         continue;
       }
+      const reach = FOOTER_REACH_RE.exec(line.trim());
+      if (reach) {
+        reachOrBypass = normaliseReachOrBypass(reach[1]);
+        continue;
+      }
       const a = FOOTER_APPROVED_RE.exec(line.trim());
       if (a) {
         const list = blankToNull(a[1]);
@@ -170,7 +201,7 @@ export function parseBriefFeedback(markdown: string): ParsedBriefFeedback {
 
   const approvedActions = [...new Set([...checkedActions, ...footerApproved])].sort();
 
-  return { useful, wrong, changedPriority, approvedActions };
+  return { useful, wrong, changedPriority, reachOrBypass, approvedActions };
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +219,7 @@ export function makeFeedbackRow(
     useful: parsed.useful,
     wrong: parsed.wrong,
     changedPriority: parsed.changedPriority,
+    reachOrBypass: parsed.reachOrBypass,
     approvedActions: parsed.approvedActions,
     acceptedCount: parsed.approvedActions.length,
   };

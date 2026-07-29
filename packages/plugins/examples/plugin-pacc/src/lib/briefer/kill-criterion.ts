@@ -19,7 +19,7 @@
  * the worker/CLI layer.
  */
 
-import type { ParsedBriefFeedback } from "./feedback.js";
+import type { ParsedBriefFeedback, ReachOrBypass } from "./feedback.js";
 
 // ---------------------------------------------------------------------------
 // Thresholds (PRD § 0.5)
@@ -43,18 +43,24 @@ export interface KillCriterionMetric {
   acceptedCount: number;
   /** How many J1 actions attributable to this brief were completed. */
   j1CompletedCount: number;
+  /**
+   * T-3.14: did the principal act on the day's next action from pacc, or
+   * bypass pacc for the CLI/vault? The H2 anti-pattern signal — null until
+   * the principal records it in the brief footer.
+   */
+  reachOrBypass: ReachOrBypass | null;
 }
 
 export function initMetric(briefDate: string, suggestionsCount: number): KillCriterionMetric {
-  return { briefDate, suggestionsCount, acceptedCount: 0, j1CompletedCount: 0 };
+  return { briefDate, suggestionsCount, acceptedCount: 0, j1CompletedCount: 0, reachOrBypass: null };
 }
 
-/** Set acceptedCount from parsed feedback (idempotent — replaces, not adds). */
+/** Set acceptedCount + reachOrBypass from parsed feedback (idempotent — replaces, not adds). */
 export function applyFeedbackToMetric(
   metric: KillCriterionMetric,
   parsed: ParsedBriefFeedback,
 ): KillCriterionMetric {
-  return { ...metric, acceptedCount: parsed.approvedActions.length };
+  return { ...metric, acceptedCount: parsed.approvedActions.length, reachOrBypass: parsed.reachOrBypass };
 }
 
 /** Bump j1CompletedCount when a brief-attributed J1 task completes. */
@@ -84,6 +90,15 @@ export interface GateResult {
   redFlag: boolean;
   /** False until KILL_WINDOW briefs exist. */
   windowFull: boolean;
+  /**
+   * T-3.14: H2 reach/bypass over the window — how many days the principal
+   * acted from pacc vs bypassed to CLI, + the reach rate. The § 0.5
+   * anti-pattern signal (a useful brief that the principal nonetheless
+   * bypasses is the control-plane-as-J3 trap).
+   */
+  reachCount: number;
+  bypassCount: number;
+  reachRate: number | null;
 }
 
 /**
@@ -99,12 +114,16 @@ export function evaluateGate(metrics: KillCriterionMetric[]): GateResult {
 
   const acceptedSum = window.reduce((s, m) => s + m.acceptedCount, 0);
   const j1Sum = window.reduce((s, m) => s + m.j1CompletedCount, 0);
+  const reachCount = window.filter((m) => m.reachOrBypass === "acted-from-pacc").length;
+  const bypassCount = window.filter((m) => m.reachOrBypass === "bypassed-to-cli").length;
+  const recorded = reachCount + bypassCount;
+  const reachRate = recorded > 0 ? reachCount / recorded : null;
 
   const windowFull = window.length >= KILL_WINDOW;
   const pass = acceptedSum >= KILL_ACCEPTED_THRESHOLD && j1Sum >= KILL_J1_THRESHOLD;
   const redFlag = windowFull && !pass;
 
-  return { window, acceptedSum, j1Sum, pass, redFlag, windowFull };
+  return { window, acceptedSum, j1Sum, pass, redFlag, windowFull, reachCount, bypassCount, reachRate };
 }
 
 // ---------------------------------------------------------------------------
@@ -140,11 +159,18 @@ export function renderSelfCheckSection(
   const rSuggestions = rolling.reduce((s, m) => s + m.suggestionsCount, 0);
   const rAccepted = rolling.reduce((s, m) => s + m.acceptedCount, 0);
   const rJ1 = rolling.reduce((s, m) => s + m.j1CompletedCount, 0);
+  const rReach = rolling.filter((m) => m.reachOrBypass === "acted-from-pacc").length;
+  const rBypass = rolling.filter((m) => m.reachOrBypass === "bypassed-to-cli").length;
+  const rRecorded = rReach + rBypass;
 
   out.push(`- Briefs (last ${SELF_CHECK_ROLLING_DAYS}d): ${rolling.length}`);
   out.push(`- Suggestions: ${rSuggestions}`);
   out.push(`- Accepted next actions: ${rAccepted}`);
   out.push(`- J1 actions completed: ${rJ1}`);
+  out.push(
+    `- Acted from pacc / bypassed to CLI: ${rReach} / ${rBypass}` +
+      (rRecorded > 0 ? ` (${Math.round((rReach / rRecorded) * 100)}% reach)` : " (not yet recorded)"),
+  );
 
   const gate = evaluateGate(metrics);
   if (gate.redFlag) {
@@ -159,6 +185,17 @@ export function renderSelfCheckSection(
     out.push("");
     out.push(
       `> _Measurement window not yet full (${gate.window.length}/${KILL_WINDOW} briefs)._`,
+    );
+  }
+
+  // T-3.14: advisory H2 signal — bypass-dominant use suggests pacc may be the
+  // anti-pattern even when the accepted-action meter passes (the principal
+  // ticks boxes but reaches for the CLI when it's time to actually act).
+  if (rRecorded >= 3 && rBypass > rReach) {
+    out.push("");
+    out.push(
+      `> ⚠ **Bypass-dominant** over the last ${SELF_CHECK_ROLLING_DAYS}d (${rBypass} bypass vs ${rReach} reach). ` +
+        `A useful brief the principal nonetheless bypasses is the § 0.5 control-plane-as-J3 trap — weigh this before expanding pacc.`,
     );
   }
 

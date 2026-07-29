@@ -25,7 +25,7 @@ function metric(
   j1CompletedCount: number,
   suggestionsCount = 4,
 ): KillCriterionMetric {
-  return { briefDate, suggestionsCount, acceptedCount, j1CompletedCount };
+  return { briefDate, suggestionsCount, acceptedCount, j1CompletedCount, reachOrBypass: null };
 }
 
 /** Five consecutive days ending 2026-05-22. */
@@ -34,7 +34,7 @@ const DAYS = ["2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-2
 describe("metric lifecycle", () => {
   it("initMetric starts accepted/j1 at 0", () => {
     const m = initMetric("2026-05-22", 5);
-    expect(m).toEqual({ briefDate: "2026-05-22", suggestionsCount: 5, acceptedCount: 0, j1CompletedCount: 0 });
+    expect(m).toEqual({ briefDate: "2026-05-22", suggestionsCount: 5, acceptedCount: 0, j1CompletedCount: 0, reachOrBypass: null });
   });
 
   it("applyFeedbackToMetric sets acceptedCount from approved actions", () => {
@@ -43,6 +43,7 @@ describe("metric lifecycle", () => {
       useful: true,
       wrong: null,
       changedPriority: null,
+      reachOrBypass: null,
       approvedActions: ["a", "b", "c"],
     });
     expect(updated.acceptedCount).toBe(3);
@@ -206,5 +207,59 @@ describe("renderBriefMarkdown — self-check integration", () => {
   it("self-check appears before Human Feedback", () => {
     const md = renderBriefMarkdown(emptyBrief());
     expect(md.indexOf("## Control-plane self-check")).toBeLessThan(md.indexOf("## Human Feedback"));
+  });
+});
+
+describe("T-3.14 reach/bypass (H2 signal)", () => {
+  it("evaluateGate tallies reach vs bypass over the window + computes reachRate", () => {
+    const ms = [
+      { ...metric("2026-05-18", 1, 0), reachOrBypass: "acted-from-pacc" as const },
+      { ...metric("2026-05-19", 1, 0), reachOrBypass: "bypassed-to-cli" as const },
+      { ...metric("2026-05-20", 1, 0), reachOrBypass: "acted-from-pacc" as const },
+      { ...metric("2026-05-21", 1, 0), reachOrBypass: null },
+      { ...metric("2026-05-22", 1, 0), reachOrBypass: "bypassed-to-cli" as const },
+    ];
+    const gate = evaluateGate(ms);
+    expect(gate.reachCount).toBe(2);
+    expect(gate.bypassCount).toBe(2);
+    expect(gate.reachRate).toBe(0.5);
+  });
+
+  it("reachRate is null when nothing recorded yet", () => {
+    const gate = evaluateGate([metric("2026-05-22", 0, 0)]);
+    expect(gate.reachRate).toBeNull();
+  });
+
+  it("applyFeedbackToMetric carries reachOrBypass through", () => {
+    const m = initMetric("2026-05-22", 5);
+    const updated = applyFeedbackToMetric(m, {
+      useful: true,
+      wrong: null,
+      changedPriority: null,
+      reachOrBypass: "bypassed-to-cli",
+      approvedActions: ["a"],
+    });
+    expect(updated.reachOrBypass).toBe("bypassed-to-cli");
+  });
+
+  it("renderSelfCheckSection surfaces reach/bypass + a bypass-dominant advisory", () => {
+    const ms = [
+      { ...metric("2026-05-20", 1, 0), reachOrBypass: "bypassed-to-cli" as const },
+      { ...metric("2026-05-21", 1, 0), reachOrBypass: "bypassed-to-cli" as const },
+      { ...metric("2026-05-22", 1, 0), reachOrBypass: "acted-from-pacc" as const },
+    ];
+    const lines = renderSelfCheckSection(ms, new Date("2026-05-22T08:00:00.000Z"));
+    const md = lines.join("\n");
+    expect(md).toMatch(/Acted from pacc \/ bypassed to CLI: 1 \/ 2/);
+    expect(md).toMatch(/⚠ \*\*Bypass-dominant\*\*/);
+  });
+
+  it("no bypass-dominant advisory when reach >= bypass", () => {
+    const ms = [
+      { ...metric("2026-05-21", 1, 0), reachOrBypass: "acted-from-pacc" as const },
+      { ...metric("2026-05-22", 1, 0), reachOrBypass: "acted-from-pacc" as const },
+    ];
+    const lines = renderSelfCheckSection(ms, new Date("2026-05-22T08:00:00.000Z"));
+    expect(lines.join("\n")).not.toMatch(/Bypass-dominant/);
   });
 });
