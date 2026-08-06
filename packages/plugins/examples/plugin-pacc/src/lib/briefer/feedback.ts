@@ -153,8 +153,9 @@ export function parseBriefFeedback(markdown: string): ParsedBriefFeedback {
       continue;
     }
 
-    // Checkbox toggles — only count checked boxes inside AI-Proposed Tasks.
-    if (currentSection === "ai-proposed tasks") {
+    // Checkbox toggles — only count checked boxes inside the Agent task queue
+    // (T-3.15: renamed from "AI-Proposed Tasks").
+    if (currentSection === "agent task queue") {
       const cb = CHECKBOX_RE.exec(line.trim());
       if (cb) {
         const checked = cb[1].toLowerCase() === "x";

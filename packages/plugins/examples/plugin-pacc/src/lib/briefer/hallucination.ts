@@ -139,6 +139,11 @@ const DEFAULT_ALLOW_LIST = new Set<string>([
   // common hyphenated words in the brief's own prose (not references)
   "re-grounding",
   "pre-pmf",
+  // T-3.15 question-led brief structural markers
+  "non-obvious",
+  "riskiest-first",
+  "market-assumption",
+  "think-test",
 ]);
 
 /**

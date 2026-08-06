@@ -46,9 +46,10 @@ export function renderBriefMarkdown(
   out.push(`# Daily Operating Brief - ${brief.briefDate}`);
   out.push("");
   out.push(
-    "> **How to give feedback:** in **AI-Proposed Tasks** below, tick the actions you approve " +
-      "(`- [ ]` -> `- [x]`). Fill the **Human Feedback** section at the bottom (Useful / Wrong / " +
-      "Changed priority). Then run `pacc brief --feedback`.",
+    "> **How to give feedback:** focus on the **Lead Question** + **Decisions** below — " +
+      "that's your plane. The **Agent task queue** is the agent's work (visibility, not your attention). " +
+      "Fill the **Human Feedback** footer (Useful / Wrong / Changed priority / Today's next action / Lead override). " +
+      "Then run `pacc brief --feedback`.",
   );
   out.push("");
 
@@ -97,39 +98,40 @@ export function renderBriefMarkdown(
   }
   out.push("");
 
-  // -- Recommended Focus -----------------------------------------------------
-  out.push("## Recommended Focus");
+  // -- Lead Question (T-3.15: question-led brief) ---------------------------
+  // The principal's plane: the riskiest non-obvious assumption + its welded test.
+  out.push("## Lead Question");
   out.push("");
-  if (brief.recommendedFocus) {
-    const f = brief.recommendedFocus;
-    out.push(`- Primary project: ${nameOf(brief, f.projectId)}`);
-    out.push(`- Why now: ${f.rationale}`);
-    out.push(`- Next smallest action: ${f.summary}`);
-    out.push(`- Job classification: ${f.jobClassification ?? "unclassified"}`);
-    out.push(`- Expected outcome: ${f.expectedArtifact ?? "_(not stated)_"}`);
-    out.push(`- Source support: ${renderInlineSourceRefs(f.sourceRefs)}`);
+  if (brief.leadQuestion) {
+    const lq = brief.leadQuestion;
+    out.push(`- Project: ${lq.projectName}`);
+    out.push(`- Question (riskiest assumption): ${lq.statement}`);
+    out.push(`- Test (next action): ${lq.test}`);
+    out.push(`- Confidence: ${Math.round(lq.confidence * 100)}%`);
+    if (lq.overridden) {
+      out.push("> _⚠ Lead overridden from riskiest-first default._");
+    }
   } else {
-    const ph = options.omitEmptySectionPlaceholders ? "" : ` ${EMPTY_PLACEHOLDER}`;
-    out.push(`- Primary project:${ph}`);
-    out.push("- Why now:");
-    out.push("- Next smallest action:");
-    out.push("- Job classification:");
-    out.push("- Risk if ignored:");
-    out.push("- Source support:");
+    out.push(
+      `> _No testable lead question — no project has a hypothesis with a test plan. ` +
+        `Author one for your riskiest non-obvious assumption._`,
+    );
   }
   out.push("");
 
-  // -- Projects Needing Attention -------------------------------------------
-  // From blockedProjects + highLeverageActions. We synthesize one row per
-  // project, deduplicating by projectId.
-  out.push("## Projects Needing Attention");
+  // -- Open Questions to Validate (the divergent candidate layer) ------------
+  out.push("## Open Questions to Validate");
   out.push("");
-  out.push("| Project | State | Lane | Stale Status | Recommended Action | Authority | Confidence |");
-  out.push("|---|---|---|---|---|---|---|");
-  const attentionRows = synthesizeAttentionRows(brief);
-  for (const row of attentionRows) out.push(row);
-  if (attentionRows.length === 0 && !options.omitEmptySectionPlaceholders) {
-    out.push(`| ${EMPTY_PLACEHOLDER} | | | | | | |`);
+  const openQs = [...brief.openQuestions].sort(byProjectName);
+  for (const q of openQs) {
+    const fidelity = q.fidelityMismatch ? " ⚠ _market-assumption / think-test_" : "";
+    out.push(`- **${q.projectName}**: ${q.statement}`);
+    out.push(`  - Test: ${q.test} (confidence: ${Math.round(q.confidence * 100)}%)${fidelity}`);
+  }
+  if (openQs.length === 0 && !options.omitEmptySectionPlaceholders) {
+    out.push(
+      `> _No additional testable questions. Author hypotheses with test plans to populate this layer._`,
+    );
   }
   out.push("");
 
@@ -153,8 +155,8 @@ export function renderBriefMarkdown(
   }
   out.push("");
 
-  // -- Escalations -----------------------------------------------------------
-  out.push("## Escalations");
+  // -- Decisions needing you (T-3.15: elevated from buried Escalations) -----
+  out.push("## Decisions needing you");
   out.push("");
   const escalations = [...brief.escalations].sort(byProjectIdThenQuestion);
   for (const e of escalations) {
@@ -166,8 +168,8 @@ export function renderBriefMarkdown(
   }
   out.push("");
 
-  // -- AI-Proposed Tasks -----------------------------------------------------
-  out.push("## AI-Proposed Tasks");
+  // -- Agent task queue (T-3.15: demoted from "AI-Proposed Tasks") -----------
+  out.push("## Agent task queue");
   out.push("");
   const proposed = [...brief.highLeverageActions, ...brief.backlogCandidates].sort(byActionSummary);
   for (const a of proposed) out.push(renderProposedActionLine(a));

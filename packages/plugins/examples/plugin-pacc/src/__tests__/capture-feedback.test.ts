@@ -18,6 +18,8 @@ function emptyBrief(over: Partial<Brief> = {}): Brief {
     inputsCacheKey: "a".repeat(64),
     portfolioSummary: { answer: null, confidence: "unknown", sourceRefs: [] },
     recommendedFocus: null,
+    leadQuestion: null,
+    openQuestions: [],
     changesSinceLast: { answer: null, confidence: "unknown", sourceRefs: [] },
     staleConflictedMemory: [],
     blockedProjects: [],

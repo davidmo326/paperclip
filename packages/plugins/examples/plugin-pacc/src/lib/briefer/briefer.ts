@@ -19,6 +19,8 @@ import type {
   BrieferDeps,
   BrieferProjectInput,
   DoNotRethinkAlert,
+  LeadQuestion,
+  OpenQuestionRow,
   ProposedAction,
   StaleRollupRow,
 } from "./types.js";
@@ -97,7 +99,7 @@ export async function runBriefer(
   // Recommended focus — pick the first active project with a non-null
   // nextSmallestAction. Heuristic only; T-3.4 will replace with job-mix-
   // aware ranking.
-  const recommendedFocus = recommendFocusFromCards(projects);
+  let recommendedFocus = recommendFocusFromCards(projects);
 
   // High-leverage actions — for MVP just surface every project's
   // nextSmallestAction as a proposal. T-3.2 will use the LLM to rank.
@@ -123,6 +125,50 @@ export async function runBriefer(
         capturedAt: r.capturedAt,
       })),
     }));
+
+  // T-3.15: the question plane — testable hypotheses (those with a testPlan),
+  // reframed as the principal's open questions. Phase 1 surfaces hypotheses
+  // only (Assumption has no test field → joins in Phase 2 with test-authoring).
+  // Riskiest-first: lowest confidence = most uncertain = the riskiest non-
+  // obvious assumption. The lead's test is welded to the Next Action (Q1).
+  const candidateQuestions: OpenQuestionRow[] = projects.flatMap((p) =>
+    p.card.activeHypotheses
+      .filter((h) => h.status === "active" && typeof h.testPlan === "string" && h.testPlan.trim() !== "")
+      .map((h) => ({
+        projectId: p.projectId,
+        projectName: p.projectName,
+        kind: "hypothesis" as const,
+        statement: h.statement,
+        test: h.testPlan!,
+        confidence: h.confidence,
+        // Fidelity marker (Q2/Q11): placeholder until the constraintLane-aware
+        // market-keyword heuristic lands in the refinement slice.
+        fidelityMismatch: false,
+      })),
+  );
+  candidateQuestions.sort((a, b) => a.confidence - b.confidence);
+  const leadQuestion: LeadQuestion | null =
+    candidateQuestions.length > 0
+      ? { ...candidateQuestions[0]!, overridden: false }
+      : null;
+  // Open questions = the rest (lead excluded), grouped per project in render.
+  const openQuestions: OpenQuestionRow[] = candidateQuestions.slice(1);
+
+  // When a lead question exists, weld its test to the Next Action (recommended
+  // Focus) so the brief's "do next" IS the test of the lead question. Falls
+  // back to the old nextSmallestAction-derived focus when no testable lead.
+  if (leadQuestion) {
+    recommendedFocus = {
+      projectId: leadQuestion.projectId,
+      summary: leadQuestion.test,
+      rationale: `Test for: ${leadQuestion.statement}`,
+      expectedArtifact: null,
+      requiredAuthority: "L1" as const,
+      jobClassification: null,
+      confidence: leadQuestion.confidence,
+      sourceRefs: [],
+    };
+  }
 
   // Narrative slots — try the model (structured + validated, T-3.2); fall back
   // to a deterministic synthesis on offline / persistent schema violation.
@@ -171,12 +217,14 @@ export async function runBriefer(
     briefDate,
     inputsCacheKey,
     portfolioSummary,
+    leadQuestion,
     recommendedFocus,
     changesSinceLast,
     staleConflictedMemory,
     blockedProjects,
     highLeverageActions,
     backlogCandidates: [],
+    openQuestions,
     escalations,
     doNotRethinkAlerts,
     imaginationFeaturesParked: [],

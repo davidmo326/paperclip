@@ -20,6 +20,8 @@ function emptyBrief(over: Partial<Brief> = {}): Brief {
     inputsCacheKey: "a".repeat(64),
     portfolioSummary: { answer: null, confidence: "unknown", sourceRefs: [] },
     recommendedFocus: null,
+    leadQuestion: null,
+    openQuestions: [],
     changesSinceLast: { answer: null, confidence: "unknown", sourceRefs: [] },
     staleConflictedMemory: [],
     blockedProjects: [],
@@ -159,11 +161,11 @@ describe("renderBriefMarkdown — structural", () => {
     const expectedSections = [
       "## Portfolio Summary",
       "## Job Mix",
-      "## Recommended Focus",
-      "## Projects Needing Attention",
+      "## Lead Question",
+      "## Open Questions to Validate",
       "## Memory / Source Issues",
-      "## Escalations",
-      "## AI-Proposed Tasks",
+      "## Decisions needing you",
+      "## Agent task queue",
       "## Do Not Rethink",
       "## Completed Since Last Brief",
       "## Source Notes",
@@ -195,14 +197,23 @@ describe("renderBriefMarkdown — structural", () => {
     expect(md).toMatch(/\| Circlo \| validate \| 60% \| 20% \| 10% \| 10% \|/);
   });
 
-  it("renders recommended focus with all 6 bullets when present", () => {
-    const md = renderBriefMarkdown(fullBrief());
-    expect(md).toContain("- Primary project: circlo");
-    expect(md).toContain("- Why now: Validate the distribution channel");
-    expect(md).toContain("- Next smallest action: Email cohort A");
-    expect(md).toContain("- Job classification: J1_signal");
-    expect(md).toContain("- Expected outcome:");
-    expect(md).toContain("- Source support:");
+  it("renders Lead Question content when leadQuestion is present", () => {
+    const brief = emptyBrief({
+      leadQuestion: {
+        projectId: "circlo",
+        projectName: "Circlo",
+        kind: "hypothesis",
+        statement: "Customers will pay for distribution analytics",
+        test: "Email cohort A to book 5 discovery calls",
+        confidence: 0.4,
+        overridden: false,
+      },
+    });
+    const md = renderBriefMarkdown(brief);
+    expect(md).toContain("- Project: Circlo");
+    expect(md).toContain("- Question (riskiest assumption): Customers will pay for distribution analytics");
+    expect(md).toContain("- Test (next action): Email cohort A to book 5 discovery calls");
+    expect(md).toContain("- Confidence: 40%");
   });
 
   it("dedupes source notes by (projectId, path)", () => {
@@ -222,9 +233,9 @@ describe("renderBriefMarkdown — structural", () => {
     expect(md).not.toContain("## ⚠ Warnings");
   });
 
-  it("recommendedFocus block shows _no entries_ shape when null", () => {
+  it("Lead Question shows a prompt when no testable lead exists", () => {
     const md = renderBriefMarkdown(emptyBrief());
-    expect(md).toContain("- Primary project: _no entries_");
+    expect(md).toContain("No testable lead question");
   });
 
   it("ends with a single trailing newline (no \\r\\n, no double-newline)", () => {
@@ -290,14 +301,12 @@ describe("renderBriefMarkdown — D-41 unclassified rendering", () => {
     expect(md).toMatch(/\| Circlo \| validate \| 60% \| 20% \| 10% \| 10% \| 4 unclassified \|/);
   });
 
-  it("renders 'unclassified' (not 'meta') for a null jobClassification in Recommended Focus and AI-Proposed Tasks", () => {
+  it("renders 'unclassified' (not 'meta') for a null jobClassification in the Agent task queue", () => {
     const brief = fullBrief();
-    brief.recommendedFocus = { ...brief.recommendedFocus!, jobClassification: null };
     brief.highLeverageActions = [
       { ...brief.highLeverageActions[0], jobClassification: null },
     ];
     const md = renderBriefMarkdown(brief);
-    expect(md).toContain("- Job classification: unclassified");
     expect(md).toContain("Email cohort A** — (no expected artifact) — L1 — unclassified");
   });
 });

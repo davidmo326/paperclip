@@ -21,6 +21,8 @@ function emptyBrief(over: Partial<Brief> = {}): Brief {
     inputsCacheKey: "a".repeat(64),
     portfolioSummary: { answer: null, confidence: "unknown", sourceRefs: [] },
     recommendedFocus: null,
+    leadQuestion: null,
+    openQuestions: [],
     changesSinceLast: { answer: null, confidence: "unknown", sourceRefs: [] },
     staleConflictedMemory: [],
     blockedProjects: [],
@@ -88,7 +90,7 @@ describe("parseBriefFeedback — checkbox toggles", () => {
     expect(parsed.approvedActions).toEqual([]);
   });
 
-  it("does not count checkboxes outside the AI-Proposed Tasks section", () => {
+  it("does not count checkboxes outside the Agent task queue section", () => {
     // A checked box appearing in another section's prose must not count.
     const brief = emptyBrief({ highLeverageActions: [action("Email cohort A")] });
     let md = renderBriefMarkdown(brief);
@@ -143,7 +145,7 @@ describe("parseBriefFeedback — footer edit shapes", () => {
   });
 
   it("T-3.14: reach/bypass is only read inside the Human Feedback section", () => {
-    const md = "## AI-Proposed Tasks\n- Today's next action: acted-from-pacc\n";
+    const md = "## Agent task queue\n- Today's next action: acted-from-pacc\n";
     expect(parseBriefFeedback(md).reachOrBypass).toBeNull();
   });
 });

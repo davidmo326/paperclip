@@ -107,6 +107,14 @@ export interface Brief {
 
   /** Free-text portfolio synthesis. */
   portfolioSummary: BriefAnswer;
+  /**
+   * T-3.15: the lead question — the single riskiest non-obvious assumption
+   * across active projects (lowest-confidence testable hypothesis), with its
+   * welded test. When present, this IS the brief's "Next Action" (the test of
+   * the lead question — the question→action weld). Null when no project has a
+   * testable hypothesis (the section renders a "no testable lead" prompt).
+   */
+  leadQuestion: LeadQuestion | null;
   /** The single most important action across the portfolio. */
   recommendedFocus: ProposedAction | null;
   /** What changed since last brief (from M3 episodic; placeholder until M3 lands). */
@@ -119,6 +127,13 @@ export interface Brief {
   highLeverageActions: ProposedAction[];
   /** Backlog candidates the steward generated (T-4.x territory). */
   backlogCandidates: ProposedAction[];
+  /**
+   * T-3.15: the testable candidate questions (per active project, ranked) that
+   * the lead question was drawn from — the divergent layer. Lead excluded
+   * (it has its own section). Phase 1 surfaces hypotheses with a `testPlan`;
+   * assumptions join when test-authoring exists (Phase 2).
+   */
+  openQuestions: OpenQuestionRow[];
   /** Open escalations requiring principal decision. */
   escalations: Array<{ projectId: string; question: string; recommendedDecision: string | null }>;
   /** Surfaces conflicts between queued work and settled decisions. */
@@ -167,6 +182,40 @@ export interface ValueAnchorSummary {
   name: string;
   purpose: string;
   resolved: boolean;
+}
+
+/**
+ * T-3.15: a testable question derived from a hypothesis (Phase 1) — the
+ * principal's question plane. `test` is the falsification probe that
+ * kill-or-confirms the belief (Hypothesis.testPlan). `fidelityMismatch` flags
+ * the #5 signal: a customer/distribution-lane project whose test isn't a
+ * market probe (the brief surfaces this inline, per the question-led grill).
+ */
+export interface OpenQuestionRow {
+  projectId: string;
+  projectName: string;
+  kind: "assumption" | "hypothesis";
+  statement: string;
+  test: string;
+  confidence: number;
+  fidelityMismatch: boolean;
+}
+
+/**
+ * T-3.15: the lead question — the riskiest testable hypothesis (lowest
+ * confidence) across active projects. Its `test` is welded to the brief's
+ * "Next Action" (the question→action weld). `overridden` is true when the
+ * principal overrode the riskiest-first default via the footer (Q10) — visible
+ * so a drift toward softer tests is diagnosable.
+ */
+export interface LeadQuestion {
+  projectId: string;
+  projectName: string;
+  kind: "assumption" | "hypothesis";
+  statement: string;
+  test: string;
+  confidence: number;
+  overridden: boolean;
 }
 
 // ---------------------------------------------------------------------------
