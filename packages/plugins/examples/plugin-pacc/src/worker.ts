@@ -23,7 +23,8 @@ import {
 } from "./constants.js";
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
-import { runMissedBriefCatchUp, runScheduledBrief } from "./lib/briefer/scheduled-brief.js";
+import { runMissedBriefCatchUp, runScheduledBrief, type ScheduledBriefResult } from "./lib/briefer/scheduled-brief.js";
+import { resolveHeartbeatUrl, sendHeartbeat } from "./lib/heartbeat.js";
 import {
   makeObsidianGuard, makeScheduledBriefDeps,
   makeCaptureFeedbackDeps,
@@ -84,6 +85,28 @@ function obsidianDailyDir(): string {
   if (override) return override;
   const home = process.env.HOME?.trim();
   return home ? `${home}/llm_shared/Obsidian/00_Daily` : "/home/ubuntu/llm_shared/Obsidian/00_Daily";
+}
+
+/**
+ * T-6.1: ping the external dead-man's switch after a duty-cycle result.
+ * Ping ONLY on `completed` — a self-paused briefer, a failed run, or an
+ * overlapping run must NOT ping (silence from the switch is the alert).
+ */
+async function pingHeartbeatAfterBrief(
+  result: ScheduledBriefResult,
+  logger: { info(msg: string, fields?: Record<string, unknown>): void; warn(msg: string, fields?: Record<string, unknown>): void },
+  runId: string | undefined,
+): Promise<void> {
+  const url = resolveHeartbeatUrl();
+  if (url === null) return; // unset → skip silently (documented in always-on.md)
+  if (result.kind !== "completed") {
+    logger.warn("heartbeat: duty cycle did not complete — no ping (alert path)", {
+      runId,
+      kind: result.kind,
+    });
+    return;
+  }
+  await sendHeartbeat(url, { logger: { warn: (msg, fields) => logger.warn(msg, { runId, ...fields }) } });
 }
 
 // ---------------------------------------------------------------------------
@@ -538,6 +561,7 @@ const plugin: PaperclipPlugin = definePlugin({
           brieferOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
           obsidianGuard: m1b.guard,
         });
+        await pingHeartbeatAfterBrief(result, ctx.logger, job.runId);
         ctx.logger.info("daily-brief job complete", {
           runId: job.runId,
           kind: result.kind,
@@ -906,6 +930,7 @@ const plugin: PaperclipPlugin = definePlugin({
           },
         });
         if (outcome.ran) {
+          await pingHeartbeatAfterBrief(outcome.result, ctx.logger, "missed-run-catchup");
           ctx.logger.info("missed-run catch-up finished", { kind: outcome.result.kind });
         }
       } catch (err) {
