@@ -126,6 +126,8 @@ export const projectControlPlaneStateSchema = z.object({
   lastReviewedAt: z.string().nullable().optional(),
   jobClassificationDominant: jobClassificationSchema.nullable().optional(),
   voiceSensitive: z.boolean().optional(),
+  /** T-6.2 evidence clock — ISO-8601 of the last evidence event. */
+  lastEvidenceAt: z.string().nullable().optional(),
 });
 
 export type ProjectControlPlaneStateInput = z.infer<typeof projectControlPlaneStateSchema>;

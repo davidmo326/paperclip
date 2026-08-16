@@ -31,6 +31,7 @@ import type {
   AuthorityLevel,
   JobClassification,
 } from "@paperclipai/shared";
+import { withEvidenceStamp } from "./evidence-clock.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -284,7 +285,10 @@ export async function writeM2(
 
   switch (op.kind) {
     case "projectState":
-      await adapter.writeProjectState(op.projectId, op.patch);
+      // T-6.2: a patch that changes the evidence base (hypotheses) stamps
+      // lastEvidenceAt — the only patch-level evidence event. Plain state-field
+      // edits never touch the evidence clock (grill 2026-08-16).
+      await adapter.writeProjectState(op.projectId, withEvidenceStamp(op.patch, new Date().toISOString()));
       break;
     case "decision":
       await adapter.writeDecision(op.projectId, op.data);

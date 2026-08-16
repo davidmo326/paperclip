@@ -19,6 +19,7 @@ import {
   PLUGIN_ID,
   PLUGIN_NAMESPACE,
   RESUME_DRAFT_STATE_KEY,
+  SOURCE_DECAY_STATE_KEY,
   TELEMETRY_STATE_KEY,
 } from "./constants.js";
 import { runStaleRehash } from "./jobs/stale-rehash.js";
@@ -110,20 +111,12 @@ async function pingHeartbeatAfterBrief(
 }
 
 // ---------------------------------------------------------------------------
-// Stale threshold constants (mirrors control-plane.service.ts)
+// Stale threshold constants — T-6.2: moved to evidence-clock.ts (single
+// source of truth); re-exported for existing imports.
 // ---------------------------------------------------------------------------
 
-const STALE_THRESHOLDS_MS: Record<
-  ProjectPortfolioState,
-  { aging: number; stale: number } | null
-> = {
-  primary: { aging: 2 * 24 * 60 * 60 * 1000, stale: 4 * 24 * 60 * 60 * 1000 },
-  active:  { aging: 5 * 24 * 60 * 60 * 1000, stale: 10 * 24 * 60 * 60 * 1000 },
-  blocked: { aging: 3 * 24 * 60 * 60 * 1000, stale: 7 * 24 * 60 * 60 * 1000 },
-  paused:  null,
-  parked:  null,
-  closed:  null,
-};
+import { STALE_THRESHOLDS_MS, evidenceAgeDays } from "./lib/evidence-clock.js";
+export { STALE_THRESHOLDS_MS };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -132,10 +125,26 @@ const STALE_THRESHOLDS_MS: Record<
 function computeStaleStatus(
   portfolioState: ProjectPortfolioState | null | undefined,
   controlPlaneUpdatedAt: Date | string | null | undefined,
+  /**
+   * T-6.2 evidence clock: days since the project's evidence base last
+   * changed. When finite, THIS is the decay key — controlPlaneUpdatedAt
+   * (any state-write, whosever) never resets decay (grill 2026-08-16).
+   * Null → legacy fallback to controlPlaneUpdatedAt (pre-evidence rows).
+   */
+  evidenceAgeDays: number | null = null,
 ): ProjectStaleStatus {
   if (!portfolioState) return "fresh";
   const thresholds = STALE_THRESHOLDS_MS[portfolioState] ?? null;
   if (thresholds === null) return "fresh";
+
+  if (evidenceAgeDays !== null && Number.isFinite(evidenceAgeDays)) {
+    // Evidence-keyed path — the only thing that resets it is an evidence event.
+    if (evidenceAgeDays * 86_400_000 >= thresholds.stale) return "stale";
+    if (evidenceAgeDays * 86_400_000 >= thresholds.aging) return "aging";
+    return "fresh";
+  }
+
+  // Legacy fallback (no evidence signal recorded yet).
   if (!controlPlaneUpdatedAt) return "fresh";
   const updatedMs =
     typeof controlPlaneUpdatedAt === "string"
@@ -232,10 +241,34 @@ async function refreshProjectTelemetry(
     }
   }
 
-  // Compute stale status using control plane updated-at
+  // T-6.2: evidence clock inputs — source-decay record (M1a mtimes), the
+  // state-stamped evidence events, and the latest decision in the ledger.
+  // Read-side observation only: no write path can launder the decay key.
+  const [decayRecord, decisions] = await Promise.all([
+    ctx.state
+      .get({ scopeKind: "project", scopeId: projectId, namespace: PLUGIN_NAMESPACE, stateKey: SOURCE_DECAY_STATE_KEY })
+      .catch(() => null) as Promise<{ daysSinceLastTouch: number | null } | null>,
+    makeDecisionDeps(ctx)
+      .listProjectDecisions(projectId)
+      .catch(() => [] as Array<{ createdAt: string }>),
+  ]);
+  const latestDecisionAt = decisions.reduce<string | null>(
+    (acc, d) => (acc === null || d.createdAt > acc ? d.createdAt : acc),
+    null,
+  );
+  const evidenceAge = evidenceAgeDays({
+    sourceDecayDaysSinceTouch: decayRecord?.daysSinceLastTouch ?? null,
+    lastEvidenceAt:
+      (project.controlPlaneState as { lastEvidenceAt?: string | null } | null)?.lastEvidenceAt ?? null,
+    latestDecisionAt,
+  });
+
+  // Compute stale status using the evidence clock (T-6.2) — controlPlaneUpdatedAt
+  // is only the legacy fallback for rows with no evidence signal yet.
   const staleStatus = computeStaleStatus(
     portfolioState,
     project.controlPlaneUpdatedAt,
+    evidenceAge,
   );
 
   // Compute stale reason
@@ -247,7 +280,7 @@ async function refreshProjectTelemetry(
         staleStatus === "stale"
           ? thresholds.stale / (24 * 60 * 60 * 1000)
           : thresholds.aging / (24 * 60 * 60 * 1000);
-      staleReason = `Control plane not updated in over ${thresholdDays}d (${portfolioState})`;
+      staleReason = `No new evidence in over ${thresholdDays}d (${portfolioState})`;
     }
   }
 

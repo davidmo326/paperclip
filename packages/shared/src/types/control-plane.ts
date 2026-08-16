@@ -160,6 +160,13 @@ export interface ProjectControlPlaneState {
   jobClassificationDominant?: JobClassification | null;
   /** Voice-sensitive content (e.g. Circlo blog) — agent voice gates apply. */
   voiceSensitive?: boolean;
+  /**
+   * T-6.2 evidence clock: ISO-8601 of the last *evidence event* (decision
+   * recorded, hypothesis status/evidence change, completed J1 action).
+   * Staleness keys off evidence recency, never state-write recency — author
+   * identity never resets the clock, only event type does (grill 2026-08-16).
+   */
+  lastEvidenceAt?: string | null;
 }
 
 export interface ProjectControlPlaneTelemetry {
