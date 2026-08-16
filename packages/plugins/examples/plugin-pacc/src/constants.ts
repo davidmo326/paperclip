@@ -24,6 +24,13 @@ export const BRIEFER_PAUSED_STATE_KEY = "briefer-paused.v1";
 export const BRIEFER_PAUSE_AUDIT_STATE_KEY = "briefer-pause-audit.v1";
 /** T-3.9 — captured principal feedback per brief (instance scope, namespace=brief-date). */
 export const BRIEF_FEEDBACK_STATE_KEY = "brief-feedback.v1";
+
+/**
+ * T-6.3 delta-only brief: the last brief's per-project card keys + aging
+ * statuses + lead key, persisted alongside each brief so the next run can
+ * compute quiet projects (noise discipline — grill Q12, 2026-08-16).
+ */
+export const BRIEF_DELTA_STATE_KEY = "brief-delta.v1";
 /** T-3.10 — kill-criterion metrics: single instance-scoped map keyed by briefDate. */
 export const KILL_CRITERION_STATE_KEY = "kill-criterion.v1";
 

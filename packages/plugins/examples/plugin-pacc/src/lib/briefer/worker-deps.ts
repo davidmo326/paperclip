@@ -31,6 +31,7 @@
 import {
   BRIEFER_PAUSED_STATE_KEY,
   BRIEFER_PAUSE_AUDIT_STATE_KEY,
+  BRIEF_DELTA_STATE_KEY,
   BRIEF_FEEDBACK_STATE_KEY,
   BRIEF_STORE_STATE_KEY,
   CONFLICTS_STATE_KEY,
@@ -45,7 +46,7 @@ import { buildContextCard, type ContextCard } from "../context-card.js";
 import type { ProjectFreshnessRecord } from "../../jobs/stale-rehash.js";
 import type { ProjectDecayRecord } from "../../jobs/source-decay-check.js";
 import type { ProjectConflictsState } from "../conflict.js";
-import type { Brief, BrieferDeps, BrieferProjectInput, ValueAnchorSummary } from "./types.js";
+import type { Brief, BriefDeltaRecord, BrieferDeps, BrieferProjectInput, ValueAnchorSummary } from "./types.js";
 import type { OverlapGuardStore, BriefInProgressLock } from "./overlap-guard.js";
 import {
   auditRowsFromSightings,
@@ -421,6 +422,28 @@ export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProje
 // Briefer deps
 // ---------------------------------------------------------------------------
 
+/**
+ * T-6.3: slim the brief into its delta record. When the brief predates the
+ * delta fields (persisted older rows), missing maps degrade to empty —
+ * the next brief then treats everything as changed (renders all), which is
+ * the safe direction.
+ */
+export function extractBriefDelta(brief: Brief): BriefDeltaRecord {
+  const leadKey = brief.leadQuestion
+    ? `${brief.leadQuestion.projectId}::${brief.leadQuestion.statement}`
+    : null;
+  // leadSince: the day this lead FIRST appeared. If this brief carried it
+  // over unchanged, keep the original date; otherwise it starts today.
+  const leadSince = brief.leadUnchangedSince ?? (leadKey ? brief.briefDate : null);
+  return {
+    briefDate: brief.briefDate,
+    projectCardKeys: brief.projectCardKeys ?? {},
+    projectAgingStatus: brief.projectAgingStatus ?? {},
+    leadKey,
+    leadSince,
+  };
+}
+
 export function makeBrieferDeps(
   ctx: WorkerCtx,
   cards: BrieferProjectInput[],
@@ -455,7 +478,22 @@ export function makeBrieferDeps(
         { scopeKind: "instance", namespace: brief.briefDate, stateKey: BRIEF_STORE_STATE_KEY },
         brief,
       );
+      // T-6.3: persist the delta record alongside — what the NEXT brief needs
+      // to decide quiet projects + aging crossings (single instance-scoped
+      // key, overwritten each brief).
+      await ctx.state.set(
+        { scopeKind: "instance", namespace: PLUGIN_NAMESPACE, stateKey: BRIEF_DELTA_STATE_KEY },
+        extractBriefDelta(brief),
+      );
       return { id: `brief-${brief.briefDate}` };
+    },
+    async readLastBriefDelta() {
+      const rec = (await ctx.state.get({
+        scopeKind: "instance",
+        namespace: PLUGIN_NAMESPACE,
+        stateKey: BRIEF_DELTA_STATE_KEY,
+      })) as BriefDeltaRecord | null;
+      return rec && typeof rec.briefDate === "string" ? rec : null;
     },
     callModel:
       callModel ??

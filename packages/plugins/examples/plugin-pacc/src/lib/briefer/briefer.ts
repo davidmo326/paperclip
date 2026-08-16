@@ -73,58 +73,10 @@ export async function runBriefer(
     .update(briefDate + "|" + projects.map((p) => p.card.cacheKey).join("|"))
     .digest("hex");
 
-  // Compute the structural sections (no LLM needed)
-  const blockedProjects = projects
-    .filter((p) => p.card.portfolioState === "blocked" || p.card.blockers.answer !== null)
-    .map((p) => ({
-      projectId: p.projectId,
-      projectName: p.projectName,
-      blockerSummary: p.card.blockers.answer,
-    }));
-
-  const staleConflictedMemory = computeStaleRollup(projects);
-  const escalations = projects.flatMap((p) =>
-    p.card.openEscalations.map((e) => ({
-      projectId: p.projectId,
-      question: e.question,
-      recommendedDecision: e.recommendedDecision,
-    })),
-  );
-  const doNotRethinkAlerts = computeDoNotRethinkAlerts(projects);
-  const sourceNotes = projects.flatMap((p) =>
-    p.card.sourceRefs.map((r) => ({ projectId: p.projectId, path: r.path })),
-  );
-  const warnings = [...projects.flatMap((p) => p.card.warnings)];
-
   // Recommended focus — pick the first active project with a non-null
   // nextSmallestAction. Heuristic only; T-3.4 will replace with job-mix-
   // aware ranking.
   let recommendedFocus = recommendFocusFromCards(projects);
-
-  // High-leverage actions — for MVP just surface every project's
-  // nextSmallestAction as a proposal. T-3.2 will use the LLM to rank.
-  const highLeverageActions: ProposedAction[] = projects
-    .filter((p) => p.card.nextActions.answer !== null)
-    .map((p) => ({
-      projectId: p.projectId,
-      summary: p.card.nextActions.answer ?? "",
-      rationale: p.card.goal.answer ?? "(no intent declared)",
-      expectedArtifact: null,
-      requiredAuthority: "L1" as const,
-      // D-41: a missing jobClassificationDominant must never masquerade as
-      // "meta" — render null (renderer shows "unclassified").
-      jobClassification:
-        (p.card as { jobClassificationDominant?: "J1_signal" | "J2_distribution" | "J3_product" | "meta" | null })
-          .jobClassificationDominant ?? null,
-      confidence: p.card.confidence ?? 0.5,
-      sourceRefs: p.card.nextActions.sourceRefs.map((r) => ({
-        kind: r.kind,
-        path: r.path,
-        section: r.section,
-        hash: r.hash,
-        capturedAt: r.capturedAt,
-      })),
-    }));
 
   // T-3.15: the question plane — testable hypotheses (those with a testPlan),
   // reframed as the principal's open questions. Phase 1 surfaces hypotheses
@@ -152,7 +104,8 @@ export async function runBriefer(
       ? { ...candidateQuestions[0]!, overridden: false }
       : null;
   // Open questions = the rest (lead excluded), grouped per project in render.
-  const openQuestions: OpenQuestionRow[] = candidateQuestions.slice(1);
+  // T-6.3: quiet projects filtered out after the delta computation below.
+  const candidateRest: OpenQuestionRow[] = candidateQuestions.slice(1);
 
   // When a lead question exists, weld its test to the Next Action (recommended
   // Focus) so the brief's "do next" IS the test of the lead question. Falls
@@ -170,8 +123,108 @@ export async function runBriefer(
     };
   }
 
-  // Narrative slots — try the model (structured + validated, T-3.2); fall back
-  // to a deterministic synthesis on offline / persistent schema violation.
+  // T-6.3 delta-only brief (noise discipline, grill Q12 2026-08-16): compute
+  // which projects are QUIET — card unchanged, aging status unchanged, no
+  // open escalations, not carrying the lead question. Quiet projects
+  // contribute nothing to per-project sections. Aging surfaces as threshold
+  // crossings only. The lead question repeats until acted on (it IS the
+  // welded next action) but carries an "unchanged since" marker.
+  const lastDelta = (await deps.readLastBriefDelta?.()) ?? null;
+  const prevKeys = lastDelta?.projectCardKeys ?? null;
+  const prevAging = lastDelta?.projectAgingStatus ?? null;
+  const leadKey = leadQuestion ? `${leadQuestion.projectId}::${leadQuestion.statement}` : null;
+  const leadUnchangedSince =
+    leadQuestion && lastDelta !== null && lastDelta.leadKey === leadKey
+      ? (lastDelta.leadSince ?? lastDelta.briefDate)
+      : null;
+
+  const quietProjectIds: string[] = [];
+  const projectCardKeys: Record<string, string> = {};
+  const projectAgingStatus: Record<string, string> = {};
+  const agingCrossings: Array<{
+    projectId: string;
+    projectName: string;
+    from: string;
+    to: string;
+  }> = [];
+  for (const p of projects) {
+    projectCardKeys[p.projectId] = p.card.cacheKey;
+    const status = p.card.staleStatus ?? "fresh";
+    projectAgingStatus[p.projectId] = status;
+
+    // Crossing = status changed vs the previous brief (fires once, on the day).
+    const prevStatus = prevAging?.[p.projectId];
+    if (prevAging !== null && prevStatus !== undefined && prevStatus !== status) {
+      agingCrossings.push({
+        projectId: p.projectId,
+        projectName: p.projectName,
+        from: prevStatus,
+        to: status,
+      });
+    }
+
+    const cardUnchanged = prevKeys !== null && prevKeys[p.projectId] === p.card.cacheKey;
+    const agingUnchanged = prevAging !== null && prevAging[p.projectId] === status;
+    const isLead = leadQuestion?.projectId === p.projectId;
+    const hasEscalations = p.card.openEscalations.length > 0;
+    if (cardUnchanged && agingUnchanged && !isLead && !hasEscalations) {
+      quietProjectIds.push(p.projectId);
+    }
+  }
+  const quiet = new Set(quietProjectIds);
+  const nonQuiet = projects.filter((p) => !quiet.has(p.projectId));
+
+  // Structural sections, delta-filtered where per-project (T-6.3). Escalations
+  // stay unfiltered (they self-extinguish when the principal decides);
+  // stale-conflicted memory stays (portfolio-level data-quality rollup).
+  const blockedProjects = nonQuiet
+    .filter((p) => p.card.portfolioState === "blocked" || p.card.blockers.answer !== null)
+    .map((p) => ({
+      projectId: p.projectId,
+      projectName: p.projectName,
+      blockerSummary: p.card.blockers.answer,
+    }));
+  const staleConflictedMemory = computeStaleRollup(projects);
+  const escalations = projects.flatMap((p) =>
+    p.card.openEscalations.map((e) => ({
+      projectId: p.projectId,
+      question: e.question,
+      recommendedDecision: e.recommendedDecision,
+    })),
+  );
+  const doNotRethinkAlerts = computeDoNotRethinkAlerts(nonQuiet);
+  const sourceNotes = nonQuiet.flatMap((p) =>
+    p.card.sourceRefs.map((r) => ({ projectId: p.projectId, path: r.path })),
+  );
+  const warnings = [...nonQuiet.flatMap((p) => p.card.warnings)];
+  const openQuestions: OpenQuestionRow[] = candidateRest.filter(
+    (q) => !quiet.has(q.projectId),
+  );
+
+  // High-leverage actions — for MVP surface each NON-QUIET project's
+  // nextSmallestAction as a proposal. T-3.2 will use the LLM to rank.
+  const highLeverageActions: ProposedAction[] = nonQuiet
+    .filter((p) => p.card.nextActions.answer !== null)
+    .map((p) => ({
+      projectId: p.projectId,
+      summary: p.card.nextActions.answer ?? "",
+      rationale: p.card.goal.answer ?? "(no intent declared)",
+      expectedArtifact: null,
+      requiredAuthority: "L1" as const,
+      // D-41: a missing jobClassificationDominant must never masquerade as
+      // "meta" — render null (renderer shows "unclassified").
+      jobClassification:
+        (p.card as { jobClassificationDominant?: "J1_signal" | "J2_distribution" | "J3_product" | "meta" | null })
+          .jobClassificationDominant ?? null,
+      confidence: p.card.confidence ?? 0.5,
+      sourceRefs: p.card.nextActions.sourceRefs.map((r) => ({
+        kind: r.kind,
+        path: r.path,
+        section: r.section,
+        hash: r.hash,
+        capturedAt: r.capturedAt,
+      })),
+    }));
   let portfolioSummary: Brief["portfolioSummary"];
   if (options.skipModel) {
     portfolioSummary = offlinePortfolioSummary(projects);
@@ -241,6 +294,11 @@ export async function runBriefer(
       approvedActions: [],
     },
     warnings,
+    quietProjectIds,
+    agingCrossings,
+    projectCardKeys,
+    projectAgingStatus,
+    leadUnchangedSince,
   };
 
   await deps.saveBrief(brief);

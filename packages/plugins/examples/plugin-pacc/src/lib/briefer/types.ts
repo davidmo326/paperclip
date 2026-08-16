@@ -170,6 +170,30 @@ export interface Brief {
   };
   /** Soft warnings the briefer wants the principal to see. */
   warnings: string[];
+  /**
+   * T-6.3 delta-only brief (noise discipline, grill Q12 2026-08-16): projects
+   * whose context card, aging status, and escalation state are all unchanged
+   * since the last brief. They contribute NOTHING to this brief's per-project
+   * sections — "still stuck on the same thing as yesterday" is never repeated.
+   * Optional for back-compat with persisted briefs.
+   */
+  quietProjectIds?: string[];
+  /**
+   * T-6.3: aging threshold crossings only (fresh→aging→stale and recoveries),
+   * never standing statuses. One line per crossing, fires on the crossing day.
+   */
+  agingCrossings?: Array<{
+    projectId: string;
+    projectName: string;
+    from: string;
+    to: string;
+  }>;
+  /** T-6.3: per-project context-card keys this brief was built from (delta persistence). */
+  projectCardKeys?: Record<string, string>;
+  /** T-6.3: per-project aging statuses this brief observed (delta persistence). */
+  projectAgingStatus?: Record<string, string>;
+  /** T-6.3: the lead question's briefDate when it carried over unchanged; null when new. */
+  leadUnchangedSince?: string | null;
 }
 
 /**
@@ -216,6 +240,24 @@ export interface LeadQuestion {
   test: string;
   confidence: number;
   overridden: boolean;
+}
+
+/**
+ * T-6.3: the delta state persisted with every brief — what the NEXT brief
+ * needs to decide which projects are quiet (unchanged) and which aged
+ * across a threshold. Kept slim + serializable (plugin_state).
+ */
+export interface BriefDeltaRecord {
+  /** The brief this delta describes (YYYY-MM-DD). */
+  briefDate: string;
+  /** projectId -> context-card cacheKey (unchanged key = unchanged card). */
+  projectCardKeys: Record<string, string>;
+  /** projectId -> aging status observed that day ("fresh"|"aging"|"stale"|"critical"). */
+  projectAgingStatus: Record<string, string>;
+  /** Stable identity of the lead question that day (projectId + statement hash-safe). */
+  leadKey: string | null;
+  /** briefDate the current lead first appeared. */
+  leadSince: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +314,13 @@ export interface BrieferDeps {
    * Optional — when absent the brief renders with no Value Anchors section.
    */
   listValueAnchors?(): Promise<ValueAnchorSummary[]>;
+
+  /**
+   * T-6.3 delta-only brief: the previous brief's per-project delta record
+   * (card keys, aging statuses, lead key). Optional — when absent, every
+   * project renders (first-run behaviour; nothing is quiet).
+   */
+  readLastBriefDelta?(): Promise<BriefDeltaRecord | null>;
 
   /**
    * L1 propose-only. Wraps the platform's proposeM2 with an L1 ceiling

@@ -66,6 +66,26 @@ export function renderBriefMarkdown(
   }
   out.push("");
 
+  // -- Aging crossings (T-6.3: threshold crossings only, never standing status)
+  const crossings = brief.agingCrossings ?? [];
+  if (crossings.length > 0) {
+    out.push("## Aging");
+    out.push("");
+    for (const c of crossings) {
+      out.push(`- **${nameOf(brief, c.projectId) || c.projectName}**: ${c.from} → ${c.to}`);
+    }
+    out.push("");
+  }
+
+  // -- Quiet projects (T-6.3 noise discipline) --------------------------------
+  const quietCount = brief.quietProjectIds?.length ?? 0;
+  if (quietCount > 0) {
+    out.push(
+      `> _${quietCount} project${quietCount === 1 ? "" : "s"} unchanged since the last brief — quiet today._`,
+    );
+    out.push("");
+  }
+
   // -- Value Anchors (M1b, T-2.10 Part B) ------------------------------------
   // Portfolio-level context: the principal's value anchors, cited via
   // [[Name]] § Section @ hash8 (docs/value-anchor-citation-format.md). Rendered
@@ -108,6 +128,9 @@ export function renderBriefMarkdown(
     out.push(`- Question (riskiest assumption): ${lq.statement}`);
     out.push(`- Test (next action): ${lq.test}`);
     out.push(`- Confidence: ${Math.round(lq.confidence * 100)}%`);
+    if (brief.leadUnchangedSince) {
+      out.push(`> _Same lead since ${brief.leadUnchangedSince} — still your next action until acted on._`);
+    }
     if (lq.overridden) {
       out.push("> _⚠ Lead overridden from riskiest-first default._");
     }
