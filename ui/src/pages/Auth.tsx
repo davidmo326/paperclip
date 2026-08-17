@@ -95,7 +95,11 @@ export function AuthPage() {
               event.preventDefault();
               if (mutation.isPending) return;
               if (!canSubmit) {
-                setError("Please fill in all required fields.");
+                setError(
+                  mode === "sign_up" && password.trim().length > 0 && password.trim().length < 8
+                    ? "Password must be at least 8 characters."
+                    : "Please fill in all required fields.",
+                );
                 return;
               }
               mutation.mutate();
