@@ -9,6 +9,7 @@ import {
 import type {
   Issue,
   Project,
+  ProjectControlPlaneTelemetry,
   ProjectPortfolioState,
   ProjectStaleStatus,
 } from "@paperclipai/shared";
@@ -739,6 +740,29 @@ const plugin: PaperclipPlugin = definePlugin({
       );
 
       return results;
+    });
+
+    ctx.data.register("project-control-plane", async (params) => {
+      const projectId =
+        typeof params.projectId === "string" ? params.projectId : "";
+      const companyId =
+        typeof params.companyId === "string" ? params.companyId : "";
+      if (!projectId || !companyId) return null;
+      const project = await ctx.projects.get(projectId, companyId);
+      if (!project) return null;
+      const telemetry = await ctx.state.get({
+        scopeKind: "project",
+        scopeId: projectId,
+        namespace: PLUGIN_NAMESPACE,
+        stateKey: TELEMETRY_STATE_KEY,
+      });
+      return {
+        projectId,
+        companyId,
+        controlPlaneState: project.controlPlaneState ?? null,
+        telemetry: (telemetry as ProjectControlPlaneTelemetry | null) ?? null,
+        warnings: [],
+      };
     });
 
     ctx.data.register("project-telemetry", async (params) => {
