@@ -1732,15 +1732,20 @@ export function pluginLoader(
         apiVersion: manifest.apiVersion,
         hostHandlers,
         autoRestart: true,
-        // PACC_* control-plane env (model selection, heartbeat URL…) is
-        // host configuration the plugins read from process.env — pass it
-        // through the spawn boundary. spawnProcess otherwise gives workers
-        // a minimal env by design; this prefix is the control plane's own
-        // namespace, so nothing else leaks.
+        // PACC_* control-plane env (model selection, heartbeat URL…) plus the
+        // Anthropic-compatible model-endpoint vars (GLM Coding Plan via
+        // api.z.ai) are host configuration the plugins read from process.env
+        // — pass them through the spawn boundary. spawnProcess otherwise
+        // gives workers a minimal env by design; these are the control
+        // plane's own namespaces, so nothing else leaks.
         env: Object.fromEntries(
           Object.entries(process.env).filter(
             ([key, value]): value is string =>
-              /^PACC_[A-Z0-9_]+$/.test(key) && typeof value === "string",
+              typeof value === "string" &&
+              (/^PACC_[A-Z0-9_]+$/.test(key) ||
+                key === "ANTHROPIC_BASE_URL" ||
+                key === "ANTHROPIC_AUTH_TOKEN" ||
+                key === "ANTHROPIC_API_KEY"),
           ),
         ),
       };
