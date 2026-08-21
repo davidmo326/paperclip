@@ -388,7 +388,7 @@ export function deterministicJournal(pack: StewardRehydrationPack): Omit<Steward
     .map((p) => ({
       project: p.projectName,
       proposal: p.nextAction!,
-      whyNow: p.staleStatus ? `stale (${p.staleStatus})` : "highest-ranked attention project",
+      whyNow: p.staleStatus ? `attention rank: stale (${p.staleStatus})` : "ranked highest for attention today",
       jobClassification: "meta" as const,
       requiredAuthority: "L1",
       sourceRefs: [`card:${p.projectId}`],

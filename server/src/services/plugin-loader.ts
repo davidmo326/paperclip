@@ -1732,6 +1732,17 @@ export function pluginLoader(
         apiVersion: manifest.apiVersion,
         hostHandlers,
         autoRestart: true,
+        // PACC_* control-plane env (model selection, heartbeat URL…) is
+        // host configuration the plugins read from process.env — pass it
+        // through the spawn boundary. spawnProcess otherwise gives workers
+        // a minimal env by design; this prefix is the control plane's own
+        // namespace, so nothing else leaks.
+        env: Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key, value]): value is string =>
+              /^PACC_[A-Z0-9_]+$/.test(key) && typeof value === "string",
+          ),
+        ),
       };
 
       // Repo-local plugin installs can resolve workspace TS sources at runtime

@@ -15,10 +15,14 @@ export function renderStewardJournalMarkdown(journal: StewardJournal): string {
     lines.push(...ls);
   };
 
+  // NB: keep timestamps out of ISO-T form here — "2026-08-21T21:37" makes the
+  // D-39 slug detector backtrack onto the date prefix ("2026-08-") and
+  // false-flag the journal's own header.
+  const generatedAtReadable = journal.generatedAt.replace("T", " ").replace(/(\.\d{3})?Z$/, " UTC");
   push(
     `# Steward Journal — ${journal.journalDate}`,
     "",
-    `_Generated ${journal.generatedAt} · ${
+    `_Generated ${generatedAtReadable} · ${
       journal.modelGenerated ? "model-assisted (L0/L1)" : "deterministic (model off)"
     } · confidence ${journal.confidence.toFixed(2)}_`,
     "",
