@@ -21,12 +21,18 @@ import {
   PLUGIN_NAMESPACE,
   RESUME_DRAFT_STATE_KEY,
   SOURCE_DECAY_STATE_KEY,
+  STEWARD_PAUSED_STATE_KEY,
   TELEMETRY_STATE_KEY,
 } from "./constants.js";
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
 import { runMissedBriefCatchUp, runScheduledBrief, type ScheduledBriefResult } from "./lib/briefer/scheduled-brief.js";
 import { resolveHeartbeatUrl, sendHeartbeat } from "./lib/heartbeat.js";
+import {
+  runMissedStewardCatchUp,
+  runScheduledSteward,
+} from "./lib/steward/scheduled-steward.js";
+import { makeScheduledStewardDeps } from "./lib/steward/worker-deps.js";
 import {
   makeObsidianGuard, makeScheduledBriefDeps,
   makeCaptureFeedbackDeps,
@@ -603,6 +609,41 @@ const plugin: PaperclipPlugin = definePlugin({
       },
     );
 
+    // -----------------------------------------------------------------------
+    // Job: T-4.8 daily L0/L1 async steward run (08:20 local, after the brief)
+    // -----------------------------------------------------------------------
+
+    ctx.jobs.register(
+      JOB_KEYS.stewardDaily,
+      async (job: PluginJobContext): Promise<void> => {
+        ctx.logger.info("Running daily-steward job", {
+          runId: job.runId,
+          trigger: job.trigger,
+        });
+        // Model wiring mirrors the briefer: PACC_STEWARD_MODEL enables the
+        // local Claude CLI (subscription auth); unset/off → deterministic
+        // state-diff journal. Authority is hard-capped L0/L1 by construction
+        // of StewardDeps (no writeM2/task/approvals surface).
+        const { deps, model } = await makeScheduledStewardDeps(ctx);
+        ctx.logger.info("daily-steward model mode", {
+          runId: job.runId,
+          modelEnabled: model.enabled,
+          modelId: model.modelId,
+        });
+        const result = await runScheduledSteward(deps, {
+          runId: job.runId,
+          obsidianBaseDir: obsidianDailyDir(),
+          stewardOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+        });
+        // Heartbeat stays brief-only (T-6.1) — the steward rides the same
+        // duty cycle; a dead host silences the brief ping too.
+        ctx.logger.info("daily-steward job complete", {
+          runId: job.runId,
+          kind: result.kind,
+        });
+      },
+    );
+
     // T-3.11: Weekly portfolio review (Mon 09:00).
     ctx.jobs.register(
       JOB_KEYS.weeklyReview,
@@ -859,6 +900,60 @@ const plugin: PaperclipPlugin = definePlugin({
       return { resumed: true, auditRow: result.auditRow };
     });
 
+    // T-4.8: run the steward on demand (`pacc steward --run`). Reuses the
+    // exact cron pipeline; same-day re-runs are idempotent (byte-identical
+    // journal → no write).
+    ctx.actions.register("run-steward", async () => {
+      const { deps, model } = await makeScheduledStewardDeps(ctx);
+      const result = await runScheduledSteward(deps, {
+        obsidianBaseDir: obsidianDailyDir(),
+        stewardOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+      });
+      return {
+        kind: result.kind,
+        modelEnabled: model.enabled,
+        modelId: model.modelId,
+        path: result.kind === "completed" || result.kind === "skipped_paused" ? result.obsidianWrite.path : null,
+        hallucinationFlagCount: result.kind === "completed" ? result.hallucinationFlagCount : 0,
+        selfPaused: result.kind === "completed" ? result.selfPaused : result.kind === "skipped_paused",
+      };
+    });
+
+    // T-4.8 (D-39 parity): clear the steward's self-pause flag.
+    ctx.actions.register("resume-steward", async () => {
+      const prior = (await ctx.state.get({
+        scopeKind: "instance",
+        namespace: PLUGIN_NAMESPACE,
+        stateKey: STEWARD_PAUSED_STATE_KEY,
+      })) as { paused: boolean; reason: string | null } | null;
+      if (prior === null || prior.paused !== true) {
+        throw new Error("steward is not paused — nothing to resume");
+      }
+      if (ctx.state.delete) {
+        await ctx.state.delete({
+          scopeKind: "instance",
+          namespace: PLUGIN_NAMESPACE,
+          stateKey: STEWARD_PAUSED_STATE_KEY,
+        });
+      } else {
+        await ctx.state.set(
+          { scopeKind: "instance", namespace: PLUGIN_NAMESPACE, stateKey: STEWARD_PAUSED_STATE_KEY },
+          null,
+        );
+      }
+      await ctx.events.emit(
+        "agent.resumed",
+        (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? "instance",
+        {
+          agent: "steward",
+          actor: "principal",
+          at: new Date().toISOString(),
+          priorReason: prior.reason,
+        },
+      );
+      return { resumed: true, priorReason: prior.reason };
+    });
+
     // T-3.12 (D-39): the current 24h hallucination-flag window, one row per
     // unique normalized reference (not per flagged run).
     ctx.data.register("hallucination-audit", async () => {
@@ -992,6 +1087,28 @@ const plugin: PaperclipPlugin = definePlugin({
         }
       } catch (err) {
         ctx.logger.error("missed-run catch-up failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    // T-4.8: catch up a missed steward run at startup, same fire-and-forget
+    // contract as the brief catch-up.
+    void (async () => {
+      try {
+        const { deps, model } = await makeScheduledStewardDeps(ctx);
+        const outcome = await runMissedStewardCatchUp({
+          obsidianBaseDir: obsidianDailyDir(),
+          logger: ctx.logger,
+          runner: (options) => runScheduledSteward(deps, options),
+          runnerOptions: {
+            stewardOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+          },
+        });
+        if (outcome.ran) {
+          ctx.logger.info("steward missed-run catch-up finished", { kind: outcome.result.kind });
+        }
+      } catch (err) {
+        ctx.logger.error("steward missed-run catch-up failed", {
           error: err instanceof Error ? err.message : String(err),
         });
       }

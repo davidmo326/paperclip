@@ -68,6 +68,13 @@ const manifest: PaperclipPluginManifestV1 = {
       schedule: "0 8 * * *", // 08:00 local daily
     },
     {
+      jobKey: JOB_KEYS.stewardDaily,
+      displayName: "Daily Steward Run",
+      description:
+        "T-4.8 / D-45 Track 2: gate-exempt L0/L1 async steward run — rehydrates value anchors + context cards + open ledgers, writes the Steward Journal to Obsidian (00_Daily/Steward Journal - YYYY-MM-DD.md) with top-3 proposals, drafts, and the awaiting-return queue. Overlap-guarded; idempotent per day; self-pauses on the D-39 hallucination tripwire.",
+      schedule: "20 8 * * *", // 08:20 local daily (after the 08:00 brief)
+    },
+    {
       jobKey: JOB_KEYS.weeklyReview,
       displayName: "Weekly Portfolio Review",
       description:

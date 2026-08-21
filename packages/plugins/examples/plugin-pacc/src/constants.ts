@@ -24,6 +24,14 @@ export const BRIEFER_PAUSED_STATE_KEY = "briefer-paused.v1";
 export const BRIEFER_PAUSE_AUDIT_STATE_KEY = "briefer-pause-audit.v1";
 /** T-3.9 — captured principal feedback per brief (instance scope, namespace=brief-date). */
 export const BRIEF_FEEDBACK_STATE_KEY = "brief-feedback.v1";
+/** T-4.8 — steward self-pause flag (instance scope; separate from the briefer's). */
+export const STEWARD_PAUSED_STATE_KEY = "steward-paused.v1";
+/** T-4.8 — advisory lock for the scheduled-steward overlap guard. */
+export const STEWARD_IN_PROGRESS_STATE_KEY = "steward-in-progress.v1";
+/** T-4.8 — stored StewardJournal keyed by date (instance scope, namespace=journal-date). */
+export const STEWARD_JOURNAL_STORE_STATE_KEY = "steward-journal.v1";
+/** T-4.8 — last journal's per-project card keys (the "what changed" diff baseline). */
+export const STEWARD_JOURNAL_DELTA_STATE_KEY = "steward-journal-delta.v1";
 
 /**
  * T-6.3 delta-only brief: the last brief's per-project card keys + aging
@@ -70,6 +78,8 @@ export const JOB_KEYS = {
   weeklyReview: "weekly-review",
   /** T-3.11 — weekend prep (Fri 16:00). */
   weekendPrep: "weekend-prep",
+  /** T-4.8 — daily L0/L1 async steward run (08:20, after the brief). */
+  stewardDaily: "steward-daily",
   /**
    * T-2.1 — supervisor tick for the Obsidian filesystem watcher. The watcher
    * itself is a continuous chokidar process started once in `setup()`; this
