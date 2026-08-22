@@ -23,7 +23,7 @@ export function renderStewardJournalMarkdown(journal: StewardJournal): string {
     `# Steward Journal — ${journal.journalDate}`,
     "",
     `_Generated ${generatedAtReadable} · ${
-      journal.modelGenerated ? "model-assisted (L0/L1)" : "deterministic (model off)"
+      journal.modelGenerated ? "model on · L0/L1" : "deterministic (model off)"
     } · confidence ${journal.confidence.toFixed(2)}_`,
     "",
   );
