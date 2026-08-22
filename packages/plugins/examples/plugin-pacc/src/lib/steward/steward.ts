@@ -424,13 +424,23 @@ function rankScore(p: StewardRehydrationPack["projects"][number]): number {
 // Runner
 // ---------------------------------------------------------------------------
 
+function formatLocalDate(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export async function runSteward(
   deps: StewardDeps,
   options: RunStewardOptions = {},
 ): Promise<StewardJournal> {
   const now = options.now ?? new Date();
   const modelId = options.modelId ?? STEWARD_DEFAULT_MODEL;
-  const journalDate = now.toISOString().slice(0, 10);
+  // Calendar date in the runtime's local timezone (TZ env) — the journal is
+  // a local-morning artifact; toISOString would date it a day behind in
+  // anything east of UTC (e.g. Australia/Sydney).
+  const journalDate = formatLocalDate(now);
 
   const [projects, anchors, ledgers, yesterdays, lastBrief, feedback] = await Promise.all([
     deps.listActiveProjectCards(),

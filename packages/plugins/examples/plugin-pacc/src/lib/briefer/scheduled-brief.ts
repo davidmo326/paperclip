@@ -181,7 +181,7 @@ export async function runScheduledBrief(
 ): Promise<ScheduledBriefResult> {
   const now = options.now ?? new Date();
   const obsidianBaseDir = options.obsidianBaseDir ?? DEFAULT_OBSIDIAN_DIR;
-  const briefDate = now.toISOString().slice(0, 10);
+  const briefDate = formatBriefDate(now);
 
   // 0. Self-pause check (T-3.7). If the briefer is paused, write a stub
   //    brief to Obsidian and skip the run entirely.

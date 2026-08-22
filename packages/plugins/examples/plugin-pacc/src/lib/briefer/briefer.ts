@@ -57,6 +57,13 @@ export interface RunBrieferOptions {
   onSchemaViolation?: (error: string) => void;
 }
 
+function formatBriefDate(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export async function runBriefer(
   deps: BrieferDeps,
   options: RunBrieferOptions = {},
@@ -68,7 +75,10 @@ export async function runBriefer(
 
   // Stable cache key — sum the per-project cacheKeys + briefDate. If any
   // upstream context changes, the brief's cacheKey changes too.
-  const briefDate = now.toISOString().slice(0, 10);
+  // Calendar date in the runtime's local timezone (TZ env) — the brief is a
+  // local-morning artifact; toISOString would date it a day behind in
+  // anything east of UTC (e.g. Australia/Sydney).
+  const briefDate = formatBriefDate(now);
   const inputsCacheKey = createHash("sha256")
     .update(briefDate + "|" + projects.map((p) => p.card.cacheKey).join("|"))
     .digest("hex");

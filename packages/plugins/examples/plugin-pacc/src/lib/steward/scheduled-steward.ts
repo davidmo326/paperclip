@@ -109,7 +109,7 @@ export async function runScheduledSteward(
 ): Promise<ScheduledStewardResult> {
   const now = options.now ?? new Date();
   const obsidianBaseDir = options.obsidianBaseDir ?? DEFAULT_OBSIDIAN_DIR;
-  const journalDate = now.toISOString().slice(0, 10);
+  const journalDate = formatLocalDate(now);
 
   // 0. Self-pause check — steward's own flag, not the briefer's.
   if (deps.hallucination) {
