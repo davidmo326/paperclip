@@ -1,0 +1,19 @@
+# VM overlay for the quickstart compose — used by the dashboard one-click launcher
+# (systemd user unit `paperclip.service`) and documented in the vault's
+# "Homelab Access & Recovery" note. Combine as:
+#   docker compose -f docker-compose.quickstart.yml -f docker-compose.vm.yml up -d
+services:
+  paperclip:
+    container_name: paperclip
+    # No restart policy: lifecycle is owned by the dashboard/systemd unit (on-demand, not always-on).
+    restart: "no"
+    environment:
+      # pacc plugin reads portfolio state from the real vault (mounted below).
+      PACC_OBSIDIAN_DIR: "/home/ubuntu/llm_shared/Obsidian"
+      PAPERCLIP_PUBLIC_URL: "https://pacc.home"
+    volumes:
+      # Vault mounted at its native path so links/paths inside notes stay valid.
+      - "/home/ubuntu/llm_shared/Obsidian:/home/ubuntu/llm_shared/Obsidian"
+      # App data OUTSIDE the Syncthing-synced tree: a live DB inside ~/llm_shared
+      # would generate sync conflicts with the Mac. NOTE: not yet in nightly backups.
+      - "/home/ubuntu/paperclip-data:/paperclip"

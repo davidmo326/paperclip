@@ -58,7 +58,7 @@ function makeInputs(p: FakeProject): BrieferProjectInput {
     ];
   }
   if (p.nextAction !== undefined) {
-    (card as { nextActions: { answer: string | null } }).nextActions = {
+    (card as { nextActions: { answer: string | null; sourceRefs: unknown[] } }).nextActions = {
       answer: p.nextAction,
       sourceRefs: [],
     };
