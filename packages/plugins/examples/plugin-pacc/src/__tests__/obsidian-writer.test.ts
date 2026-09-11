@@ -7,10 +7,11 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  briefHasPrincipalEdits,
   obsidianBriefExists,
   obsidianBriefPath,
   writeObsidianBrief,
@@ -147,5 +148,61 @@ describe("writeObsidianBrief — atomic write", () => {
     });
     expect(r.kind).toBe("wrote");
     expect(await readFile(p, "utf8")).toBe("# fresh");
+  });
+});
+
+describe("writeObsidianBrief — no-clobber guard (T-6.7b)", () => {
+  const footer = (useful: string, wrong: string): string =>
+    [
+      "# Daily Operating Brief - 2026-09-11",
+      "",
+      "## Human Feedback",
+      "",
+      `- Useful: ${useful}`,
+      `- Wrong: ${wrong}`,
+      "- Changed priority: ",
+      "- Today's next action: ",
+      "- Approved actions: ",
+      "",
+    ].join("\n");
+
+  it("refuses to overwrite a brief the principal has annotated", async () => {
+    const dir = path.join(workdir, "guard-annotated");
+    await mkdir(dir, { recursive: true });
+    const annotated = footer("yes", "source notes seem arbitrary");
+    await writeFile(path.join(dir, "Daily Brief - 2026-09-11.md"), annotated, "utf8");
+    const result = await writeObsidianBrief(annotated.replace("yes", "no — regenerated"), {
+      baseDir: dir,
+      briefDate: "2026-09-11",
+    });
+    expect(result.kind).toBe("skipped_edited");
+    expect(await readFile(path.join(dir, "Daily Brief - 2026-09-11.md"), "utf8")).toBe(annotated);
+  });
+
+  it("still regenerates when the existing footer is unfilled", async () => {
+    const dir = path.join(workdir, "guard-unfilled");
+    await mkdir(dir, { recursive: true });
+    const unfilled = footer("", "");
+    await writeFile(path.join(dir, "Daily Brief - 2026-09-11.md"), unfilled, "utf8");
+    const result = await writeObsidianBrief(unfilled.replace("# Daily Operating Brief", "# Daily Operating Brief v2"), {
+      baseDir: dir,
+      briefDate: "2026-09-11",
+    });
+    expect(result.kind).toBe("wrote");
+    expect(await readFile(path.join(dir, "Daily Brief - 2026-09-11.md"), "utf8")).toContain("v2");
+  });
+
+  it("treats byte-identical re-renders as unchanged even when annotated", async () => {
+    const dir = path.join(workdir, "guard-identical");
+    await mkdir(dir, { recursive: true });
+    const annotated = footer("yes", "kept");
+    await writeFile(path.join(dir, "Daily Brief - 2026-09-11.md"), annotated, "utf8");
+    const result = await writeObsidianBrief(annotated, { baseDir: dir, briefDate: "2026-09-11" });
+    expect(result.kind).toBe("unchanged");
+  });
+
+  it("briefHasPrincipalEdits ignores whitespace-only fills", async () => {
+    expect(briefHasPrincipalEdits(footer("  ", "\t"))).toBe(false);
+    expect(briefHasPrincipalEdits(footer("yes", ""))).toBe(true);
   });
 });

@@ -21,10 +21,29 @@ import path from "node:path";
 export interface ObsidianBriefWriteResult {
   /** Absolute path of the brief file (existed or written). */
   path: string;
-  /** What happened: `wrote` (created or overwrote), `unchanged` (skipped). */
-  kind: "wrote" | "unchanged";
+  /**
+   * What happened: `wrote` (created or overwrote), `unchanged` (skipped,
+   * byte-identical), `skipped_edited` (T-6.7b: the existing file carries
+   * principal annotations in the Human Feedback footer and the new render
+   * differs — regeneration would destroy them, so the write is refused;
+   * delete the file to force a regeneration).
+   */
+  kind: "wrote" | "unchanged" | "skipped_edited";
   /** Bytes written / would have been written. */
   byteLength: number;
+}
+
+/**
+ * True iff the Human Feedback footer of an existing brief has principal
+ * content on any line. The unfilled footer is deterministic (`- Useful: ` …
+ * with nothing after the colon), so any non-whitespace after a colon means
+ * the principal wrote it.
+ */
+export function briefHasPrincipalEdits(existingMarkdown: string): boolean {
+  const idx = existingMarkdown.indexOf("## Human Feedback");
+  if (idx === -1) return false;
+  const footer = existingMarkdown.slice(idx);
+  return /^- (?:Useful|Wrong|Changed priority|Today's next action|Approved actions):[ \t]*\S/m.test(footer);
 }
 
 export interface WriteObsidianBriefOptions {
@@ -60,21 +79,25 @@ export async function writeObsidianBrief(
   const prefix = options.filenamePrefix ?? "Daily Brief - ";
   const filename = `${prefix}${options.briefDate}.md`;
   const targetPath = path.join(options.baseDir, filename);
-
-  if (options.guard) {
-    return options.guard(targetPath, markdown);
-  }
-
   const byteLength = Buffer.byteLength(markdown, "utf8");
 
-  // Fast path: file exists + bytes match → no-op.
+  // T-6.7b no-clobber guard, checked on both the guarded and legacy paths:
+  // a differing render over an annotated brief is a Syncthing-conflict bomb
+  // (the principal annotates the file; another device holds the last sync).
   try {
     const existing = await readFile(targetPath, "utf8");
     if (existing === markdown) {
       return { path: targetPath, kind: "unchanged", byteLength };
     }
+    if (briefHasPrincipalEdits(existing)) {
+      return { path: targetPath, kind: "skipped_edited", byteLength };
+    }
   } catch (err) {
     if (!isMissingFile(err)) throw err;
+  }
+
+  if (options.guard) {
+    return options.guard(targetPath, markdown);
   }
 
   // Ensure directory exists, then atomic-rename write.
