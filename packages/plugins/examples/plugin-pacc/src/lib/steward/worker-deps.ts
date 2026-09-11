@@ -25,6 +25,7 @@ import { selectDecisionsDue } from "../decisions/decision-log.js";
 import { makeGrantDeps } from "../authority/grant-deps.js";
 import { selectExpiringGrants } from "../authority/authority-grant.js";
 import { callModelViaClaudeCli } from "../briefer/model-claude-cli.js";
+import { renderBriefMarkdown } from "../briefer/render.js";
 import { BRIEFER_DEFAULT_MODEL } from "../briefer/briefer.js";
 import { createValueAnchorService } from "../value-anchor/service.js";
 import { resolveVaultRoot } from "../vault-root.js";
@@ -167,7 +168,12 @@ export function makeStewardDeps(
         namespace: briefDate,
         stateKey: BRIEF_STORE_STATE_KEY,
       })) as Brief | null;
-      return brief ? { briefDate, markdown: "" } : null;
+      if (!brief) return null;
+      // T-6.7: the pack promised the brief's markdown and delivered "" —
+      // the steward reasoned blind. Render the stored brief (deterministic;
+      // self-check appendix omitted) so the model sees what the principal
+      // was actually shown.
+      return { briefDate, markdown: renderBriefMarkdown(brief) };
     },
     async readBriefFeedback() {
       const briefDate = await readLastBriefDate(ctx);

@@ -42,7 +42,7 @@ import {
   SOURCE_DECAY_STATE_KEY,
   BRIEF_IN_PROGRESS_STATE_KEY,
 } from "../../constants.js";
-import { buildContextCard, type ContextCard } from "../context-card.js";
+import { buildContextCard, type AssociatedNoteSummary, type ContextCard } from "../context-card.js";
 import type { ProjectFreshnessRecord } from "../../jobs/stale-rehash.js";
 import type { ProjectDecayRecord } from "../../jobs/source-decay-check.js";
 import type { ProjectConflictsState } from "../conflict.js";
@@ -304,19 +304,57 @@ export function makeCaptureFeedbackDeps(ctx: WorkerCtx): CaptureFeedbackDeps {
 const ASSOCIATED_NOTE_REF_CAP_PER_PROJECT = 8;
 
 /**
- * T-2.10: build slug -> associated M1a SourceRef[] from the grounding pipeline
- * (note-association catalog -> source-index records). Catalog entries are
- * grouped by their seed-slug projectId, each path resolved to a record
- * (path + contentHash + modifiedAt), then the per-slug list is capped to the
- * {@link ASSOCIATED_NOTE_REF_CAP_PER_PROJECT} most-recent (mtime desc, path asc
- * tie-break) so cards stay readable AND deterministic. Vanished index records
- * are skipped. An unreadable/empty association store yields an empty map
- * (brief degrades to M2-only — not fatal).
+ * T-6.7: selection order for a project's associated notes. Spine notes
+ * (seed `spineNotes` — the project's strategy ground: plans, dashboards,
+ * hypotheses) always rank first, in seed order; the rest follow by mtime
+ * desc, path asc tie-break. Total count is still capped so a big folder
+ * cannot flood the brief. Pure + deterministic.
+ */
+export function rankAssociatedRecords(
+  records: SourceIndexRecord[],
+  spineNotes: string[],
+  cap: number,
+): SourceIndexRecord[] {
+  const needles = spineNotes.map((s) => s.toLowerCase());
+  const isSpine = (r: SourceIndexRecord) => {
+    const p = r.path.toLowerCase();
+    return needles.some((n) => n.length > 0 && p.includes(n));
+  };
+  const byRecency = (a: SourceIndexRecord, b: SourceIndexRecord) => {
+    if (a.modifiedAt !== b.modifiedAt) return a.modifiedAt < b.modifiedAt ? 1 : -1;
+    return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+  };
+  const spine = records.filter(isSpine).sort(byRecency);
+  const rest = records.filter((r) => !isSpine(r)).sort(byRecency);
+  const seen = new Set<string>();
+  const out: SourceIndexRecord[] = [];
+  for (const r of [...spine, ...rest]) {
+    if (seen.has(r.path)) continue;
+    seen.add(r.path);
+    out.push(r);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/**
+ * T-2.10 (extended T-6.7): build slug -> associated M1a notes from the
+ * grounding pipeline (note-association catalog -> source-index records).
+ * Catalog entries are grouped by their seed-slug projectId, each path
+ * resolved to a record, ranked by {@link rankAssociatedRecords} (seed spine
+ * first, then mtime) and capped. Returns both the provenance refs AND the
+ * note substance (summaries) — the brief and steward reason over content,
+ * not bare paths. Vanished index records are skipped. An unreadable/empty
+ * association store yields an empty map (brief degrades to M2-only — not
+ * fatal).
  *
  * Firewall-clean: uses only the already-adapter-constructed stores built from
  * the same `ctx` (`Pick<WorkerCtx,"state"|"logger">`).
  */
-async function buildAssociatedNoteRefsBySlug(ctx: WorkerCtx): Promise<Map<string, SourceRef[]>> {
+async function buildAssociatedNotesBySlug(
+  ctx: WorkerCtx,
+  spineBySlug: Map<string, string[]>,
+): Promise<Map<string, { refs: SourceRef[]; notes: AssociatedNoteSummary[] }>> {
   const assocStore = makeNoteAssociationStore(ctx);
   const indexStore = makeSourceIndexStore(ctx);
   let catalog: Record<string, { projectId: string | null }>;
@@ -332,50 +370,66 @@ async function buildAssociatedNoteRefsBySlug(ctx: WorkerCtx): Promise<Map<string
     if (list) list.push(notePath);
     else pathsBySlug.set(entry.projectId, [notePath]);
   }
-  const out = new Map<string, SourceRef[]>();
+  const out = new Map<string, { refs: SourceRef[]; notes: AssociatedNoteSummary[] }>();
   for (const [slug, paths] of pathsBySlug) {
-    const records = (await Promise.all([...paths].sort().map((p) => indexStore.getByPath(p)))).filter(
-      (r): r is SourceIndexRecord => r !== null,
+    const records = (
+      await Promise.all([...paths].sort().map((p) => indexStore.getByPath(p)))
+    ).filter((r): r is SourceIndexRecord => r !== null);
+    const ranked = rankAssociatedRecords(
+      records,
+      spineBySlug.get(slug) ?? [],
+      ASSOCIATED_NOTE_REF_CAP_PER_PROJECT,
     );
-    records.sort((a, b) => {
-      if (a.modifiedAt !== b.modifiedAt) return a.modifiedAt < b.modifiedAt ? 1 : -1;
-      return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
-    });
-    out.set(
-      slug,
-      records.slice(0, ASSOCIATED_NOTE_REF_CAP_PER_PROJECT).map((r) => ({
+    out.set(slug, {
+      refs: ranked.map((r) => ({
         kind: "M1a",
         path: r.path,
         hash: r.contentHash,
         capturedAt: r.lastIndexedAt,
       })),
-    );
+      notes: ranked.map((r) => ({
+        path: r.path,
+        modifiedAt: r.modifiedAt,
+        summary: r.summary,
+      })),
+    });
   }
   return out;
 }
 
 /**
- * T-2.10: project name -> seed slug. The association catalog is keyed by seed
- * slug; paperclip projects are UUID-keyed and named. The two identity spaces
- * are joined by NAME (seed name === paperclip project name, e.g. "Circlo" /
- * "Storycrafter AI"). Loaded once per run from portfolio-seed.json.
+ * T-2.10: project name -> seed identity (slug + spine notes). The association
+ * catalog is keyed by seed slug; paperclip projects are UUID-keyed and named.
+ * The two identity spaces are joined by NAME (seed name === paperclip project
+ * name, e.g. "Circlo" / "Storycrafter AI"). Loaded once per run from
+ * portfolio-seed.json.
  */
-async function buildSlugByName(ctx: WorkerCtx): Promise<Map<string, string>> {
+async function buildSeedJoin(ctx: WorkerCtx): Promise<{
+  slugByName: Map<string, string>;
+  spineBySlug: Map<string, string[]>;
+}> {
   const fs = createNoteAssociationFsDeps(ctx.logger);
   const seedPath = process.env.PACC_PORTFOLIO_SEED_PATH?.trim() || defaultPortfolioSeedPath();
   const projects = await fs.loadProjects(seedPath, resolveVaultRoot());
-  const out = new Map<string, string>();
-  for (const p of projects) out.set(p.name, p.slug);
-  return out;
+  const slugByName = new Map<string, string>();
+  const spineBySlug = new Map<string, string[]>();
+  for (const p of projects) {
+    slugByName.set(p.name, p.slug);
+    if (p.spineNotes.length > 0) spineBySlug.set(p.slug, p.spineNotes);
+  }
+  return { slugByName, spineBySlug };
 }
 
 export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProjectInput[]> {
   const companies = await ctx.companies.list({ limit: 200, offset: 0 });
   // T-2.10: ground the brief in the association catalog (slug-keyed), joined to
   // paperclip projects by name. Both built once per run.
-  const [refsBySlug, slugByName] = await Promise.all([
-    buildAssociatedNoteRefsBySlug(ctx),
-    buildSlugByName(ctx),
+  const [{ refsBySlug, slugByName }] = await Promise.all([
+    (async () => {
+      const { slugByName, spineBySlug } = await buildSeedJoin(ctx);
+      const notesBySlug = await buildAssociatedNotesBySlug(ctx, spineBySlug);
+      return { refsBySlug: notesBySlug, slugByName };
+    })(),
   ]);
   const cards: BrieferProjectInput[] = [];
 
@@ -393,7 +447,12 @@ export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProje
       ]);
 
       // T-2.10: this project's associated M1a notes (slug joined by name).
-      const associatedNoteRefs = refsBySlug.get(slugByName.get(project.name) ?? "") ?? [];
+      const ground = refsBySlug.get(slugByName.get(project.name) ?? "") ?? {
+        refs: [],
+        notes: [],
+      };
+      const associatedNoteRefs = ground.refs;
+      const associatedNotes = ground.notes;
 
       const card: ContextCard = buildContextCard({
         project: {
@@ -410,6 +469,7 @@ export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProje
         activeTasks: [], // no issues wiring yet — follow-up
         authority: [], // no authority_profiles SDK client yet — follow-up
         associatedNoteRefs,
+        associatedNotes,
       });
       cards.push({ projectId: project.id, projectName: project.name, card });
     }

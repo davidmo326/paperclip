@@ -25,6 +25,7 @@ interface RawSeedEntry {
   name?: unknown;
   obsidianFolder?: unknown;
   visionRefs?: unknown;
+  spineNotes?: unknown;
 }
 
 function coercePortfolioSeedEntry(raw: RawSeedEntry): PortfolioSeedEntry | null {
@@ -34,6 +35,10 @@ function coercePortfolioSeedEntry(raw: RawSeedEntry): PortfolioSeedEntry | null 
     name: raw.name,
     obsidianFolder: typeof raw.obsidianFolder === "string" ? raw.obsidianFolder : null,
     visionRefs: Array.isArray(raw.visionRefs) ? raw.visionRefs.filter((v): v is string => typeof v === "string") : [],
+    // T-6.7: strategy-ground fragments; absent in pre-T-6.7 seeds → [].
+    spineNotes: Array.isArray(raw.spineNotes)
+      ? raw.spineNotes.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      : [],
   };
 }
 

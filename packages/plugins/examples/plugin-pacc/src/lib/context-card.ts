@@ -108,6 +108,22 @@ export interface ContextCardInputs {
    * live briefer always supplies them (empty [] when a project has none).
    */
   associatedNoteRefs?: SourceRef[];
+  /**
+   * Content ground for the same notes: path + mtime + the source-index
+   * summary (frontmatter description, else first paragraph). T-6.7: the
+   * index already computed these; surfacing them is what lets the brief/
+   * steward reason over note substance instead of bare paths. Sorted by
+   * path by the caller (deterministic cacheKey).
+   */
+  associatedNotes?: AssociatedNoteSummary[];
+}
+
+/** A note's substance as selected into the context (summary, not full text). */
+export interface AssociatedNoteSummary {
+  path: string;
+  modifiedAt: string;
+  /** Source-index summary; null when the note yielded neither a description nor a first paragraph. */
+  summary: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +197,8 @@ export interface ContextCard {
   doNotRethink: AnswerWithCitations;
   openEscalations: Escalation[];
   sourceRefs: SourceRef[];
+  /** T-6.7: note substance (summaries) for the same M1a grounding refs. */
+  associatedNotes: AssociatedNoteSummary[];
   confidence: number | null;
   staleStatus: ProjectStaleStatus | null;
   staleMarkers: StaleMarker[];
@@ -280,6 +298,10 @@ export function buildContextCard(
     doNotRethink,
     openEscalations,
     sourceRefs: allSourceRefs,
+    // Sorted by path so the cacheKey + any render stay deterministic.
+    associatedNotes: [...(inputs.associatedNotes ?? [])].sort((a, b) =>
+      a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+    ),
     confidence: state?.confidence ?? null,
     staleStatus: telemetry?.staleStatus ?? null,
     staleMarkers,

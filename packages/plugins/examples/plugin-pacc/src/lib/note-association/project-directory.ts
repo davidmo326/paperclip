@@ -23,6 +23,11 @@ export interface PortfolioSeedEntry {
    * (e.g. an abbreviation). Normalised to lowercase by `buildProjectDirectory`.
    */
   tags?: string[];
+  /**
+   * T-6.7: strategy-ground path fragments for brief source selection (see
+   * ProjectDef.spineNotes). Optional in the seed; defaults to [].
+   */
+  spineNotes: string[];
 }
 
 export interface ProjectDef {
@@ -50,6 +55,15 @@ export interface ProjectDef {
    * `10_Builds/<folder>` path prefix.
    */
   matchTags: string[];
+  /**
+   * T-6.7: path fragments (case-insensitive substring match) naming this
+   * project's strategy ground — plans, dashboards, hypotheses, ICP notes.
+   * Principal-curated in `portfolio-seed.json`. Notes matching these rank
+   * FIRST in the brief's per-project source selection regardless of mtime,
+   * so the daily brief opens on strategy, not on whatever was touched last.
+   * Empty when the seed declares none.
+   */
+  spineNotes: string[];
 }
 
 const WIKILINK_WRAPPER = /^\[\[([^\]|#]+?)(?:[|#][^\]]*)?\]\]$/;
@@ -88,5 +102,6 @@ export function buildProjectDirectory(
     folderRelPath: entry.obsidianFolder ? toVaultRelative(vaultRoot, entry.obsidianFolder) : null,
     hubNoteNames: entry.visionRefs.map(stripWikilinkWrapper).filter((n) => n.length > 0),
     matchTags: normalizeTags(entry.tags && entry.tags.length > 0 ? entry.tags : [entry.slug]),
+    spineNotes: entry.spineNotes,
   }));
 }

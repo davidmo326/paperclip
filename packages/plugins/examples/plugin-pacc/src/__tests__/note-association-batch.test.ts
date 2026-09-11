@@ -62,12 +62,13 @@ const PROJECTS = buildProjectDirectory(
       name: "Circlo",
       obsidianFolder: `${VAULT_ROOT}/10_Builds/Circlo`,
       visionRefs: ["[[BRM_philosophy]]"],
-    },
+      spineNotes: [],    },
     {
       slug: "hometrics",
       name: "Hometrics",
       obsidianFolder: `${VAULT_ROOT}/10_Builds/Hometrics`,
       visionRefs: [],
+      spineNotes: [],
     },
   ],
   VAULT_ROOT,
@@ -168,14 +169,14 @@ describe("override round-trip (fs-deps + runAssociation)", () => {
           name: "Circlo",
           obsidianFolder: `${VAULT_ROOT}/10_Builds/Circlo`,
           visionRefs: ["[[BRM_philosophy]]"],
-        },
+          spineNotes: [],        },
       ]),
       "utf8",
     );
     const fsDeps = createNoteAssociationFsDeps();
     const projects = await fsDeps.loadProjects(seedPath, VAULT_ROOT);
     expect(projects).toEqual([
-      { slug: "circlo", name: "Circlo", folderRelPath: "10_Builds/Circlo", hubNoteNames: ["BRM_philosophy"], matchTags: ["circlo"] },
+      { slug: "circlo", name: "Circlo", folderRelPath: "10_Builds/Circlo", hubNoteNames: ["BRM_philosophy"], matchTags: ["circlo"], spineNotes: [] },
     ]);
   });
 

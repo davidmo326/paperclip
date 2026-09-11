@@ -203,9 +203,16 @@ export async function runBriefer(
     })),
   );
   const doNotRethinkAlerts = computeDoNotRethinkAlerts(nonQuiet);
-  const sourceNotes = nonQuiet.flatMap((p) =>
-    p.card.sourceRefs.map((r) => ({ projectId: p.projectId, path: r.path })),
-  );
+  const sourceNotes = nonQuiet.flatMap((p) => {
+    // T-6.7: attach the note substance (source-index summary) where the ref
+    // is one of the associated M1a notes; M2 refs render path-only.
+    const summaryByPath = new Map(p.card.associatedNotes.map((n) => [n.path, n.summary]));
+    return p.card.sourceRefs.map((r) => ({
+      projectId: p.projectId,
+      path: r.path,
+      summary: summaryByPath.get(r.path) ?? null,
+    }));
+  });
   const warnings = [...nonQuiet.flatMap((p) => p.card.warnings)];
   const openQuestions: OpenQuestionRow[] = candidateRest.filter(
     (q) => !quiet.has(q.projectId),

@@ -210,9 +210,9 @@ describe("deterministicJournal (T-4.8)", () => {
     journalDate: "2026-08-20",
     valueAnchors: ANCHORS,
     projects: [
-      { projectId: "p-1", projectName: "P-1", portfolioState: "primary", currentPhase: "validate", staleStatus: null, nextAction: "Call lead", blockers: null, cardKey: "a" },
-      { projectId: "p-2", projectName: "P-2", portfolioState: "active", currentPhase: "build", staleStatus: "stale", nextAction: "Refresh evidence", blockers: "waiting on X", cardKey: "b" },
-      { projectId: "p-3", projectName: "P-3", portfolioState: "active", currentPhase: "validate", staleStatus: null, nextAction: null, blockers: null, cardKey: "c" },
+      { projectId: "p-1", projectName: "P-1", portfolioState: "primary", currentPhase: "validate", staleStatus: null, nextAction: "Call lead", blockers: null, cardKey: "a", sourceNotes: [] },
+      { projectId: "p-2", projectName: "P-2", portfolioState: "active", currentPhase: "build", staleStatus: "stale", nextAction: "Refresh evidence", blockers: "waiting on X", cardKey: "b", sourceNotes: [] },
+      { projectId: "p-3", projectName: "P-3", portfolioState: "active", currentPhase: "validate", staleStatus: null, nextAction: null, blockers: null, cardKey: "c", sourceNotes: [] },
     ],
     ledgers: {
       decisionsDue: [{ projectName: "P-1", summary: "pick stack", reviewDate: "2026-08-21" }],

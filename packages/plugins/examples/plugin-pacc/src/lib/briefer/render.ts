@@ -241,7 +241,11 @@ export function renderBriefMarkdown(
     const key = `${s.projectId}|${s.path}`;
     if (seenSources.has(key)) continue;
     seenSources.add(key);
-    out.push(`- **${nameOf(brief, s.projectId)}**: \`${s.path}\``);
+    // T-6.7: source-index summary when available — the reader sees what the
+    // note says, not just where it lives. Truncated to keep the brief scannable.
+    const summary = s.summary?.trim();
+    const summarySuffix = summary ? ` — ${summary.length > 160 ? `${summary.slice(0, 157)}...` : summary}` : "";
+    out.push(`- **${nameOf(brief, s.projectId)}**: \`${s.path}\`${summarySuffix}`);
     writtenSources += 1;
   }
   if (writtenSources === 0 && !options.omitEmptySectionPlaceholders) {

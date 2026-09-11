@@ -148,6 +148,8 @@ export function assertStewardL1(level: AuthorityLevel | string, context: string)
 // ---------------------------------------------------------------------------
 
 const JOB_CLASSES: readonly string[] = ["J1_signal", "J2_distribution", "J3_product", "meta"];
+/** T-6.7: max note summaries per project in the rehydration pack. */
+const STEWARD_PACK_SOURCE_NOTES_PER_PROJECT = 4;
 
 export type StewardParseResult =
   | { ok: true; value: Omit<StewardJournal, "journalDate" | "generatedAt" | "modelGenerated" | "inputsCacheKey"> }
@@ -315,6 +317,11 @@ export interface StewardRehydrationPack {
     nextAction: string | null;
     blockers: string | null;
     cardKey: string;
+    /**
+     * T-6.7: note substance for this project's grounding notes (source-index
+     * summaries, capped) — the steward judges with content, not card UUIDs.
+     */
+    sourceNotes: Array<{ path: string; summary: string | null }>;
   }>;
   ledgers: StewardLedgerInput;
   yesterdaysJournal: StewardJournalDelta | null;
@@ -463,6 +470,10 @@ export async function runSteward(
       nextAction: p.card.nextActions.answer,
       blockers: p.card.blockers.answer,
       cardKey: p.card.cacheKey,
+      // T-6.7: cap the substance so a 3-project pack stays prompt-sized.
+      sourceNotes: p.card.associatedNotes
+        .slice(0, STEWARD_PACK_SOURCE_NOTES_PER_PROJECT)
+        .map((n) => ({ path: n.path, summary: n.summary })),
     })),
     ledgers,
     yesterdaysJournal: yesterdays,

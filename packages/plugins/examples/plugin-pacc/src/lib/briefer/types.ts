@@ -144,8 +144,8 @@ export interface Brief {
   completedWork: Array<{ projectId: string; artifact: string; completedAt: string }>;
   /** Authority or safety issues raised by the audit. */
   authoritySafetyIssues: string[];
-  /** Source notes — pointers into M1. */
-  sourceNotes: Array<{ projectId: string; path: string }>;
+  /** Source notes — pointers into M1. T-6.7: entries may carry the source-index summary (note substance). */
+  sourceNotes: Array<{ projectId: string; path: string; summary?: string | null }>;
   /**
    * T-2.10 Part B: the principal's value anchors (M1b registry) as portfolio-
    * level context. Surfaced in every brief so the principal (and, when wired,

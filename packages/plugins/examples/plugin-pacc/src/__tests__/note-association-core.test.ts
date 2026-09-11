@@ -24,24 +24,25 @@ const SEED_ENTRIES: PortfolioSeedEntry[] = [
     name: "Circlo",
     obsidianFolder: `${VAULT_ROOT}/10_Builds/Circlo`,
     visionRefs: ["[[BRM_philosophy]]", "[[Circlo Portfolio Canvas]]", "[[Circlo refocus messaging]]"],
-  },
+    spineNotes: [],  },
   {
     slug: "hometrics",
     name: "Hometrics",
     obsidianFolder: `${VAULT_ROOT}/10_Builds/Hometrics`,
     visionRefs: ["[[First Users - Action Plan]]", "[[Validation Bet Sequence]]"],
-  },
+    spineNotes: [],  },
   {
     slug: "ndis",
     name: "NDIS",
     obsidianFolder: `${VAULT_ROOT}/10_Builds/NDIS`,
     visionRefs: ["[[Customer Discovery Scan — Digital Listening Report]]", "[[shapeup_March2026]]"],
-  },
+    spineNotes: [],  },
   {
     slug: "storycrafter",
     name: "Storycrafter AI",
     obsidianFolder: null, // repo-only project, no Obsidian folder
     visionRefs: [],
+    spineNotes: [],
   },
 ];
 
@@ -242,6 +243,7 @@ describe("computeAssociation — tag rule (T-2.3-tag)", () => {
           name: "Business Model Analysis",
           obsidianFolder: null,
           visionRefs: [],
+          spineNotes: [],
           tags: ["bma"],
         },
       ],
@@ -273,7 +275,7 @@ describe("buildProjectDirectory — matchTags (T-2.3-tag)", () => {
 
   it("uses explicit seed tags, lowercased + deduped", () => {
     const [project] = buildProjectDirectory(
-      [{ slug: "x", name: "X", obsidianFolder: null, visionRefs: [], tags: ["BMA", "bma", "Strategy"] }],
+      [{ slug: "x", name: "X", obsidianFolder: null, visionRefs: [], tags: ["BMA", "bma", "Strategy"], spineNotes: [] }],
       VAULT_ROOT,
     );
     expect(project.matchTags).toEqual(["bma", "strategy"]);
