@@ -11,7 +11,12 @@ import {
 } from "@paperclipai/db";
 import { conflict, forbidden, notFound } from "../errors.js";
 
-export const BOARD_API_KEY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Board API key lifetime. Default 30d; override via PAPERCLIP_BOARD_KEY_TTL_DAYS (e.g. 180 for ~6 months). */
+export const BOARD_API_KEY_TTL_MS =
+  (() => {
+    const days = Number(process.env.PAPERCLIP_BOARD_KEY_TTL_DAYS ?? "");
+    return Number.isFinite(days) && days > 0 ? days * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
+  })();
 export const CLI_AUTH_CHALLENGE_TTL_MS = 10 * 60 * 1000;
 
 export type CliAuthChallengeStatus = "pending" | "approved" | "cancelled" | "expired";
