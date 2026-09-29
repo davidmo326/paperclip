@@ -226,3 +226,19 @@ describe("floor seams", () => {
     expect(again.created).toEqual([]);
   });
 });
+
+describe("attention and triage moves", () => {
+  it("lets the runtime place attention in Needs you, and nowhere else", () => {
+    const at = makeWorkItem({ projectId: "p", title: "waiting", workType: "build", size: "bite", stage: "needs-you" }, { id: "a", now: NOW, actor: "runtime" });
+    expect(at.stage).toBe("needs-you");
+    const other = makeWorkItem({ projectId: "p", title: "x", workType: "build", size: "bite", stage: "triage" }, { id: "b", now: NOW, actor: "runtime" });
+    expect(other.stage).toBe("intake");
+  });
+
+  it("only triaging actors re-home items", async () => {
+    const { applyPatch } = await import("../lib/work-items/work-items.js");
+    const item = makeWorkItem({ projectId: "loose-ends", title: "x", workType: "build", size: "bite" }, { id: "a", now: NOW, actor: "principal" });
+    expect(applyPatch(item, { projectId: "hometrics" }, { now: NOW, actor: "principal" }).projectId).toBe("hometrics");
+    expect(() => applyPatch(item, { projectId: "hometrics" }, { now: NOW, actor: "hand" })).toThrow();
+  });
+});

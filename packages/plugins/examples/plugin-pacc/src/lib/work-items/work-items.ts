@@ -24,6 +24,12 @@ export type Stage = (typeof STAGES)[number];
 
 /** Actors allowed to place an item directly into a stage other than intake. */
 const TRIAGING_ACTORS = new Set(["principal", "cos"]);
+/**
+ * The runtime (cockpit) relays a live session that is waiting on the principal.
+ * That is attention, not new work, so it may land straight in Needs you — and
+ * nowhere else outside Intake (CONTEXT.md: Needs you, the one attention primitive).
+ */
+const RUNTIME_ACTOR = "runtime";
 
 export interface SourceRef {
   kind: string;
@@ -137,7 +143,11 @@ export function makeWorkItem(
   const title = optStr(input.title);
   if (!projectId || !title) throw new WorkItemValidationError("projectId and title are required");
   const requested = input.stage ? oneOf(STAGES, input.stage, "stage") : "intake";
-  const stage: Stage = TRIAGING_ACTORS.has(opts.actor) ? requested : "intake";
+  const stage: Stage = TRIAGING_ACTORS.has(opts.actor)
+    ? requested
+    : opts.actor === RUNTIME_ACTOR && requested === "needs-you"
+      ? "needs-you"
+      : "intake";
   const at = opts.now.toISOString();
   return {
     id: opts.id,
@@ -173,6 +183,8 @@ export interface WorkItemPatch {
   dispatchId?: string | null;
   draft?: Draft | null;
   note?: string | null;
+  /** Re-home the item on another line (triaging actors only). */
+  projectId?: string;
   /** Attach a session to the item (deduped by sessionId). */
   linkSession?: Partial<SessionLink> | null;
   /** Record what a hand brought back. */
@@ -217,6 +229,14 @@ export function applyPatch(item: WorkItem, patch: WorkItemPatch, opts: { now: Da
   if (patch.detail !== undefined) next.detail = optStr(patch.detail);
   if (patch.workType !== undefined) next.workType = oneOf(WORK_TYPES, patch.workType, "workType");
   if (patch.size !== undefined) next.size = oneOf(SIZES, patch.size, "size");
+  if (patch.projectId !== undefined) {
+    const pid = optStr(patch.projectId);
+    if (!pid) throw new WorkItemValidationError("projectId cannot be empty");
+    if (pid !== item.projectId && !TRIAGING_ACTORS.has(opts.actor)) {
+      throw new WorkItemValidationError("only the principal or the CoS may move an item between lines");
+    }
+    next.projectId = pid;
+  }
   if (patch.worker !== undefined) next.worker = optStr(patch.worker);
   if (patch.machine !== undefined) next.machine = optStr(patch.machine);
   if (patch.dispatchId !== undefined) next.dispatchId = optStr(patch.dispatchId);
