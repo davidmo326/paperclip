@@ -123,6 +123,15 @@ async function pingHeartbeatAfterBrief(
 // ---------------------------------------------------------------------------
 
 import { STALE_THRESHOLDS_MS, evidenceAgeDays } from "./lib/evidence-clock.js";
+import {
+  makeWorkItem,
+  applyPatch,
+  makeCapacityDay,
+  defaultAllocation,
+  type NewWorkItemInput,
+  type WorkItemPatch,
+} from "./lib/work-items/work-items.js";
+import { makeWorkItemDeps } from "./lib/work-items/work-item-deps.js";
 export { STALE_THRESHOLDS_MS };
 
 // ---------------------------------------------------------------------------
@@ -1041,6 +1050,45 @@ const plugin: PaperclipPlugin = definePlugin({
       const id = typeof params.id === "string" ? params.id : "";
       if (!id) throw new Error("id is required");
       return await revokeGrant(makeGrantDeps(ctx), id, new Date());
+    });
+
+    // T-floor (ADR 0002): work items on the factory floor.
+    ctx.actions.register("create-work-item", async (params) => {
+      const deps = makeWorkItemDeps(ctx);
+      const actor = typeof params.actor === "string" && params.actor ? params.actor : "principal";
+      const item = makeWorkItem(params as unknown as NewWorkItemInput, { id: deps.newId(), now: new Date(), actor });
+      await deps.putItem(item);
+      return { item };
+    });
+
+    ctx.actions.register("update-work-item", async (params) => {
+      const deps = makeWorkItemDeps(ctx);
+      const id = typeof params.id === "string" ? params.id : "";
+      if (!id) throw new Error("id is required");
+      const prior = await deps.getItem(id);
+      if (!prior) throw new Error(`no work item ${id}`);
+      const actor = typeof params.actor === "string" && params.actor ? params.actor : "principal";
+      const item = applyPatch(prior, (params.patch ?? {}) as WorkItemPatch, { now: new Date(), actor });
+      await deps.putItem(item);
+      return { item };
+    });
+
+    ctx.data.register("list-work-items", async (params) => {
+      const items = await makeWorkItemDeps(ctx).listItems();
+      const projectId = typeof params.projectId === "string" ? params.projectId : "";
+      return projectId ? items.filter((i) => i.projectId === projectId) : items;
+    });
+
+    // T-floor: capacity score per day (J reads `Capacity: N/10`; no note = zero).
+    ctx.actions.register("record-capacity-day", async (params) => {
+      const day = makeCapacityDay(params as Parameters<typeof makeCapacityDay>[0], new Date());
+      await makeWorkItemDeps(ctx).putCapacityDay(day);
+      return { day, allocation: defaultAllocation(day.score) };
+    });
+
+    ctx.data.register("list-capacity-days", async () => {
+      const days = await makeWorkItemDeps(ctx).listCapacityDays();
+      return days.map((d) => ({ ...d, allocation: defaultAllocation(d.score) }));
     });
 
     // T-4.6: list active grants.
