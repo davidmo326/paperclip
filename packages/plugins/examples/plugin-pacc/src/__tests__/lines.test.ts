@@ -242,3 +242,26 @@ describe("attention and triage moves", () => {
     expect(() => applyPatch(item, { projectId: "hometrics" }, { now: NOW, actor: "hand" })).toThrow();
   });
 });
+
+describe("CoS allocation (L6)", () => {
+  const proposal = (project: string, proposal: string, size: "bite" | "deep") => ({
+    project, proposal, size, whyNow: "", jobClassification: "J1_signal" as const, requiredAuthority: "L1",
+    sourceRefs: [], anchorCitations: [], confidence: 0.8, riskIfIgnored: "",
+  });
+
+  it("a recorded zero writes the day off; deep proposals are capped by deep blocks", async () => {
+    const { promoteJournalToFloor, readStewardFloor } = await import("../lib/lines/floor-actions.js");
+    const lines = memLines([lineFromSeed(SEED, { now: NOW, actor: "principal" })]);
+    const items = memItems();
+    const journal = { journalDate: "2026-09-30", attention: [proposal("Hometrics", "deep one", "deep"), proposal("Hometrics", "deep two", "deep"), proposal("Hometrics", "a bite", "bite")], drafts: [] };
+    const zero = await promoteJournalToFloor({ lines, items }, journal, NOW, { capacity: { date: "2026-09-30", score: 0, deepBlocks: 0, bites: 0, occupiedBy: null, recorded: true } });
+    expect(zero.created).toEqual([]);
+    expect(zero.skippedForCapacity).toBe(3);
+    const five = await promoteJournalToFloor({ lines, items }, journal, NOW, { capacity: { date: "2026-09-30", score: 5, deepBlocks: 1, bites: 2, occupiedBy: null, recorded: true } });
+    expect(five.created.map((i) => [i.title, i.size])).toEqual([["deep one", "deep"], ["a bite", "bite"]]);
+    expect(five.skippedForCapacity).toBe(1);
+    const floor = await readStewardFloor({ lines, items }, NOW);
+    expect(floor.lines[0]?.open.triage).toBe(2);
+    expect(floor.capacity.recorded).toBe(false);
+  });
+});

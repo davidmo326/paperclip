@@ -30,7 +30,7 @@ import { BRIEFER_DEFAULT_MODEL } from "../briefer/briefer.js";
 import { createValueAnchorService } from "../value-anchor/service.js";
 import { resolveVaultRoot } from "../vault-root.js";
 import { makeLineDeps } from "../lines/lines-deps.js";
-import { promoteJournalToFloor } from "../lines/floor-actions.js";
+import { promoteJournalToFloor, readStewardFloor } from "../lines/floor-actions.js";
 import { makeWorkItemDeps } from "../work-items/work-item-deps.js";
 import { vaultWritesEnabled } from "../briefer/obsidian-writer.js";
 import { STEWARD_ACTOR, assertStewardL1, type StewardDeps } from "./steward.js";
@@ -63,6 +63,7 @@ function instanceKey(stateKey: string) {
  */
 export const STEWARD_DEPS_ALLOWED_KEYS = [
   "listActiveProjectCards",
+  "readFloor",
   "listValueAnchors",
   "readOpenLedgers",
   "readLastJournalDelta",
@@ -121,6 +122,13 @@ export function makeStewardDeps(
   return {
     async listActiveProjectCards() {
       return cards;
+    },
+    async readFloor() {
+      try {
+        return await readStewardFloor({ lines: makeLineDeps(ctx), items: makeWorkItemDeps(ctx) }, new Date());
+      } catch {
+        return null;
+      }
     },
     async listValueAnchors() {
       if (anchorCache) return anchorCache;
@@ -214,16 +222,16 @@ export function makeStewardDeps(
         journalDate: journal.journalDate,
         projectCardKeys,
       });
-      // The journal reaches the surface as Triage items (vault is input only).
+      // The journal reaches the surface as Triage items (vault is input only),
+      // fitted to today's capacity (a recorded 0 writes the day off).
       try {
-        const promoted = await promoteJournalToFloor(
-          { lines: makeLineDeps(ctx), items: makeWorkItemDeps(ctx) },
-          journal,
-          new Date(),
-        );
+        const floorDeps = { lines: makeLineDeps(ctx), items: makeWorkItemDeps(ctx) };
+        const floor = await readStewardFloor(floorDeps, new Date()).catch(() => null);
+        const promoted = await promoteJournalToFloor(floorDeps, journal, new Date(), { capacity: floor?.capacity ?? null });
         ctx.logger.info("steward: journal promoted to floor", {
           created: promoted.created.length,
           unmatched: promoted.unmatched,
+          skippedForCapacity: promoted.skippedForCapacity,
         });
       } catch (err) {
         ctx.logger.warn("steward: journal promotion failed", { error: String(err) });

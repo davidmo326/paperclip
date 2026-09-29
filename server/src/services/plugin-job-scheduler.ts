@@ -39,7 +39,22 @@ import type { Db } from "@paperclipai/db";
 import { pluginJobs, pluginJobRuns } from "@paperclipai/db";
 import type { PluginJobStore } from "./plugin-job-store.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
-import { parseCron, nextCronTick, validateCron } from "./cron.js";
+import { parseCron, nextCronTick, nextCronTickInZone, validateCron, type ParsedCron } from "./cron.js";
+
+/**
+ * Plugin job schedules are wall-clock times in this zone when set (the unit's
+ * TZ, or PAPERCLIP_PLUGIN_JOB_TZ to override); UTC otherwise, as before.
+ */
+const PLUGIN_JOB_TZ = process.env.PAPERCLIP_PLUGIN_JOB_TZ?.trim() || process.env.TZ?.trim() || null;
+
+function nextPluginJobTick(cron: ParsedCron, after: Date): Date | null {
+  if (!PLUGIN_JOB_TZ || PLUGIN_JOB_TZ === "UTC") return nextCronTick(cron, after);
+  try {
+    return nextCronTickInZone(cron, PLUGIN_JOB_TZ, after);
+  } catch {
+    return nextCronTick(cron, after);
+  }
+}
 import { logger } from "../middleware/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -579,7 +594,7 @@ export function createPluginJobScheduler(
         );
       } else {
         const cron = parseCron(job.schedule);
-        nextRunAt = nextCronTick(cron, now);
+        nextRunAt = nextPluginJobTick(cron, now);
       }
     }
 
@@ -614,7 +629,7 @@ export function createPluginJobScheduler(
       }
 
       const cron = parseCron(job.schedule);
-      const nextRunAt = nextCronTick(cron, new Date());
+      const nextRunAt = nextPluginJobTick(cron, new Date());
 
       if (nextRunAt) {
         await jobStore.updateRunTimestamps(

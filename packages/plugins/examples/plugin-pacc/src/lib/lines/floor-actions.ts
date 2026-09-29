@@ -15,7 +15,8 @@ import {
   WORK_TYPES,
   type WorkItem,
 } from "../work-items/work-items.js";
-import type { StewardJournal } from "../steward/steward.js";
+import type { StewardFloorInput, StewardJournal } from "../steward/steward.js";
+import { defaultAllocation } from "../work-items/work-items.js";
 
 export interface FloorDeps {
   lines: LineDeps;
@@ -172,7 +173,15 @@ export async function promoteJournalToFloor(
   deps: FloorDeps,
   journal: Pick<StewardJournal, "journalDate" | "attention" | "drafts">,
   now: Date,
-): Promise<{ created: WorkItem[]; unmatched: string[] }> {
+  opts: { capacity?: StewardFloorInput["capacity"] | null } = {},
+): Promise<{ created: WorkItem[]; unmatched: string[]; skippedForCapacity: number }> {
+  // A recorded zero is a written-off day: nothing is allocated or chased.
+  const cap = opts.capacity ?? null;
+  if (cap?.recorded && (cap.score ?? 0) <= 0) {
+    return { created: [], unmatched: [], skippedForCapacity: journal.attention.length };
+  }
+  let deepLeft = cap?.recorded ? cap.deepBlocks : Number.POSITIVE_INFINITY;
+  let skippedForCapacity = 0;
   const lines = await deps.lines.listLines();
   const byKey = new Map<string, ProjectLine>();
   for (const l of lines) {
@@ -184,6 +193,11 @@ export async function promoteJournalToFloor(
   const created: WorkItem[] = [];
   const unmatched: string[] = [];
   for (const p of journal.attention) {
+    const size = p.size === "deep" ? "deep" : "bite";
+    if (size === "deep" && deepLeft <= 0) {
+      skippedForCapacity += 1;
+      continue;
+    }
     const line = byKey.get((p.project ?? "").toLowerCase());
     if (!line) {
       unmatched.push(p.project);
@@ -207,7 +221,7 @@ export async function promoteJournalToFloor(
             : p.jobClassification === "meta"
               ? "hypothesis-design"
               : "market-contact",
-        size: "bite",
+        size,
         stage: "triage",
         keyQuestion: line.keyQuestion,
         worker: "cos",
@@ -220,6 +234,44 @@ export async function promoteJournalToFloor(
     );
     await deps.items.putItem(item);
     created.push(item);
+    if (size === "deep") deepLeft -= 1;
   }
-  return { created, unmatched };
+  return { created, unmatched, skippedForCapacity };
+}
+
+function localDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** The CoS's read of the floor: today's capacity and each active line's forward stack. */
+export async function readStewardFloor(deps: FloorDeps, now: Date): Promise<StewardFloorInput> {
+  const [lines, items, days] = await Promise.all([deps.lines.listLines(), deps.items.listItems(), deps.items.listCapacityDays()]);
+  const today = localDate(now);
+  const day = days.find((d) => d.date === today) ?? null;
+  const alloc = defaultAllocation(day?.score ?? null);
+  const weekAgo = now.getTime() - 7 * 86_400_000;
+  return {
+    capacity: {
+      date: today,
+      score: day?.score ?? null,
+      deepBlocks: alloc.deepBlocks,
+      bites: alloc.bites,
+      occupiedBy: day?.occupiedBy ?? null,
+      recorded: day !== null && day.score !== null,
+    },
+    lines: lines
+      .filter((l) => l.portfolioState === "active" || l.portfolioState === "primary")
+      .map((l) => {
+        const mine = items.filter((i) => i.projectId === l.id);
+        const count = (st: string) => mine.filter((i) => i.stage === st).length;
+        return {
+          id: l.id,
+          name: l.name,
+          keyQuestion: l.keyQuestion,
+          open: { intake: count("intake"), triage: count("triage"), inProgress: count("in-progress"), needsYou: count("needs-you") },
+          needsYouTitles: mine.filter((i) => i.stage === "needs-you").map((i) => i.title).slice(0, 5),
+          doneLast7Days: mine.filter((i) => i.stage === "done" && Date.parse(i.updatedAt) >= weekAgo).length,
+        };
+      }),
+  };
 }

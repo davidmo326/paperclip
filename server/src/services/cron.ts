@@ -371,3 +371,63 @@ function advanceToNextMonth(d: Date, months: number[]): void {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Time-zone-aware next tick (plugin jobs)
+// ---------------------------------------------------------------------------
+
+const zonedFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function zonedParts(date: Date, timeZone: string) {
+  let fmt = zonedFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      weekday: "short",
+    });
+    zonedFormatters.set(timeZone, fmt);
+  }
+  const parts: Record<string, string> = {};
+  for (const p of fmt.formatToParts(date)) parts[p.type] = p.value;
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday ?? "");
+  return {
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    weekday,
+  };
+}
+
+/**
+ * Like {@link nextCronTick}, but the schedule is read as wall-clock time in
+ * `timeZone` (DST-correct). A plugin job declared "20 8 * * *" then runs at
+ * 08:20 local, not 08:20 UTC. Walks minute by minute, so it is meant for the
+ * low-frequency schedules plugins declare (a daily job resolves in ≤1440 steps).
+ */
+export function nextCronTickInZone(cron: ParsedCron, timeZone: string, after: Date): Date | null {
+  const d = new Date(after.getTime());
+  d.setUTCSeconds(0, 0);
+  d.setUTCMinutes(d.getUTCMinutes() + 1);
+  const limit = 366 * 24 * 60;
+  for (let i = 0; i < limit; i += 1) {
+    const z = zonedParts(d, timeZone);
+    if (
+      cron.minutes.includes(z.minute) &&
+      cron.hours.includes(z.hour) &&
+      cron.daysOfMonth.includes(z.day) &&
+      cron.months.includes(z.month) &&
+      cron.daysOfWeek.includes(z.weekday)
+    ) {
+      return new Date(d.getTime());
+    }
+    d.setUTCMinutes(d.getUTCMinutes() + 1);
+  }
+  return null;
+}

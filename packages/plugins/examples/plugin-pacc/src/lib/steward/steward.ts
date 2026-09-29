@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import type { AuthorityLevel } from "@paperclipai/shared";
 import type { BrieferProjectInput, ValueAnchorSummary } from "../briefer/types.js";
 import { validateValueAnchorCitation } from "../value-anchor/loader.js";
-import { STEWARD_STANDING_PROMPT } from "./standing-prompt.js";
+import { STEWARD_FLOOR_ADDENDUM, STEWARD_STANDING_PROMPT } from "./standing-prompt.js";
 
 /** Default model for the steward (judgment-heavy role → Opus default). */
 export const STEWARD_DEFAULT_MODEL = "claude-opus-4-8";
@@ -31,6 +31,8 @@ export type StewardJobClassification = "J1_signal" | "J2_distribution" | "J3_pro
 export interface StewardAttentionProposal {
   project: string;
   proposal: string;
+  /** Floor item size (CONTEXT.md: Allocation & calibration) — bite unless the model says deep. */
+  size?: "bite" | "deep";
   whyNow: string;
   jobClassification: StewardJobClassification;
   requiredAuthority: string;
@@ -75,7 +77,22 @@ export interface StewardJournalDelta {
   projectCardKeys: Record<string, string>;
 }
 
+/** Today's floor as the CoS sees it: capacity and each line's forward stack. */
+export interface StewardFloorInput {
+  capacity: { date: string; score: number | null; deepBlocks: number; bites: number; occupiedBy: string | null; recorded: boolean };
+  lines: Array<{
+    id: string;
+    name: string;
+    keyQuestion: string | null;
+    open: { intake: number; triage: number; inProgress: number; needsYou: number };
+    needsYouTitles: string[];
+    doneLast7Days: number;
+  }>;
+}
+
 export interface StewardDeps {
+  /** Read-only: the factory floor (capacity + forward stacks). Optional for older wiring. */
+  readFloor?(): Promise<StewardFloorInput | null>;
   /** Read-only: active projects + context cards (T-2.8). */
   listActiveProjectCards(): Promise<BrieferProjectInput[]>;
   /** Read-only: value-anchor registry (M1b) — objective function, citable. */
@@ -252,6 +269,7 @@ export function parseStewardModelOutput(text: string): StewardParseResult {
     attention.push({
       project,
       proposal,
+      size: str("size") === "deep" ? "deep" : "bite",
       whyNow,
       jobClassification: jobClassification as StewardJobClassification,
       requiredAuthority,
@@ -327,6 +345,8 @@ export interface StewardRehydrationPack {
   yesterdaysJournal: StewardJournalDelta | null;
   lastBrief: { briefDate: string; markdown: string } | null;
   briefFeedback: string | null;
+  /** The factory floor today (absent when not wired). */
+  floor?: StewardFloorInput | null;
 }
 
 /**
@@ -449,13 +469,14 @@ export async function runSteward(
   // anything east of UTC (e.g. Australia/Sydney).
   const journalDate = formatLocalDate(now);
 
-  const [projects, anchors, ledgers, yesterdays, lastBrief, feedback] = await Promise.all([
+  const [projects, anchors, ledgers, yesterdays, lastBrief, feedback, floor] = await Promise.all([
     deps.listActiveProjectCards(),
     deps.listValueAnchors(),
     deps.readOpenLedgers(),
     deps.readLastJournalDelta(),
     deps.readLastBrief(),
     deps.readBriefFeedback(),
+    deps.readFloor ? deps.readFloor().catch(() => null) : Promise.resolve(null),
   ]);
 
   const pack: StewardRehydrationPack = {
@@ -479,6 +500,7 @@ export async function runSteward(
     yesterdaysJournal: yesterdays,
     lastBrief,
     briefFeedback: feedback,
+    ...(floor ? { floor } : {}),
   };
 
   const inputsCacheKey = createHash("sha256")
@@ -499,6 +521,7 @@ export async function runSteward(
   if (!options.skipModel) {
     const prompt = [
       STEWARD_STANDING_PROMPT,
+      ...(pack.floor ? ["", STEWARD_FLOOR_ADDENDUM] : []),
       "",
       "## Rehydration pack (today)",
       "",
