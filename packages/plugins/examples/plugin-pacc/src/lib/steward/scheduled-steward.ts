@@ -162,7 +162,7 @@ export async function runScheduledSteward(
       ...options.stewardOptions,
       now,
       onSchemaViolation: (error) => {
-        deps.logger.warn("scheduled steward: model schema violation; journal degraded to deterministic", {
+        deps.logger.warn(`scheduled steward: model schema violation; journal degraded to deterministic — ${String(error).slice(0, 300)}`, {
           runId: options.runId,
           error,
         });

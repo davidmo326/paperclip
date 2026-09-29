@@ -1176,8 +1176,9 @@ const plugin: PaperclipPlugin = definePlugin({
     ctx.data.register("steward-latest", async () => {
       const today = new Date();
       for (let back = 0; back < 14; back++) {
+        // journals are keyed by LOCAL date (runSteward's formatLocalDate), not UTC
         const d = new Date(today.getTime() - back * 86_400_000);
-        const date = d.toISOString().slice(0, 10);
+        const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         const journal = await ctx.state.get({
           scopeKind: "instance",
           namespace: date,
