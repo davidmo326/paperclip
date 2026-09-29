@@ -917,7 +917,24 @@ const plugin: PaperclipPlugin = definePlugin({
     // T-4.8: run the steward on demand (`pacc steward --run`). Reuses the
     // exact cron pipeline; same-day re-runs are idempotent (byte-identical
     // journal → no write).
-    ctx.actions.register("run-steward", async () => {
+    ctx.actions.register("run-steward", async (params) => {
+      // The model run outlives the host's 30s action RPC: the cockpit asks for
+      // a background run and watches for the journal/Triage items instead.
+      if (params?.background === true) {
+        void (async () => {
+          try {
+            const { deps, model } = await makeScheduledStewardDeps(ctx);
+            const result = await runScheduledSteward(deps, {
+              obsidianBaseDir: obsidianDailyDir(),
+              stewardOptions: { skipModel: !model.enabled, modelId: model.modelId ?? undefined },
+            });
+            ctx.logger.info("steward: on-demand run finished", { kind: result.kind, modelEnabled: model.enabled });
+          } catch (err) {
+            ctx.logger.warn("steward: on-demand run failed", { error: String(err) });
+          }
+        })();
+        return { kind: "started" };
+      }
       const { deps, model } = await makeScheduledStewardDeps(ctx);
       const result = await runScheduledSteward(deps, {
         obsidianBaseDir: obsidianDailyDir(),
