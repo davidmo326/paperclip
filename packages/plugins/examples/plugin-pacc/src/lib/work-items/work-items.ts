@@ -39,6 +39,38 @@ export interface Draft {
   editedText?: string | null;
 }
 
+/**
+ * A session that worked on the item (CONTEXT.md: Context carry). Items
+ * accumulate sessions over their life, so any machine or device can pick the
+ * item back up with its full context.
+ */
+export interface SessionLink {
+  /** Harness session id (e.g. the Claude Code session uuid). */
+  sessionId: string;
+  /** Machine the session ran on (fabricd worker name). */
+  machine: string | null;
+  /** Harness: claude | hermes | zcode | codex. */
+  tool: string | null;
+  /** Worker role that staffed the hand (generic when no specialist owns it). */
+  worker: string | null;
+  cwd: string | null;
+  title: string | null;
+  linkedAt: string;
+}
+
+/** What a hand brought back (Context carry, return leg). */
+export interface RunResult {
+  ok: boolean;
+  summary: string;
+  /** Commits, files, drafts, URLs the run produced. */
+  links: string[];
+  /** True when the result changes the project's evidence base (moves the evidence clock). */
+  evidence: boolean;
+  sessionId: string | null;
+  costUsd: number | null;
+  at: string;
+}
+
 export interface StageMove {
   at: string;
   from: Stage | null;
@@ -64,6 +96,10 @@ export interface WorkItem {
   dispatchId: string | null;
   draft: Draft | null;
   sourceRefs: SourceRef[];
+  /** Sessions that worked on this item (absent on items created before L3). */
+  sessions?: SessionLink[];
+  /** Latest run result from a hand (absent/null until one returns). */
+  result?: RunResult | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -117,6 +153,8 @@ export function makeWorkItem(
     dispatchId: null,
     draft: null,
     sourceRefs: Array.isArray(input.sourceRefs) ? input.sourceRefs : [],
+    sessions: [],
+    result: null,
     createdBy: opts.actor,
     createdAt: at,
     updatedAt: at,
@@ -135,6 +173,36 @@ export interface WorkItemPatch {
   dispatchId?: string | null;
   draft?: Draft | null;
   note?: string | null;
+  /** Attach a session to the item (deduped by sessionId). */
+  linkSession?: Partial<SessionLink> | null;
+  /** Record what a hand brought back. */
+  result?: Partial<RunResult> | null;
+}
+
+function sessionLink(v: Partial<SessionLink>, at: string): SessionLink {
+  const sessionId = optStr(v.sessionId);
+  if (!sessionId) throw new WorkItemValidationError("linkSession needs a sessionId");
+  return {
+    sessionId,
+    machine: optStr(v.machine),
+    tool: optStr(v.tool),
+    worker: optStr(v.worker),
+    cwd: optStr(v.cwd),
+    title: optStr(v.title),
+    linkedAt: optStr(v.linkedAt) ?? at,
+  };
+}
+
+function runResult(v: Partial<RunResult>, at: string): RunResult {
+  return {
+    ok: v.ok !== false,
+    summary: (optStr(v.summary) ?? "").slice(0, 4000),
+    links: Array.isArray(v.links) ? v.links.map(optStr).filter((x): x is string => !!x).slice(0, 50) : [],
+    evidence: v.evidence === true,
+    sessionId: optStr(v.sessionId),
+    costUsd: typeof v.costUsd === "number" && Number.isFinite(v.costUsd) ? v.costUsd : null,
+    at: optStr(v.at) ?? at,
+  };
 }
 
 /** Apply a patch; stage changes are appended to history. Returns a new object. */
@@ -153,6 +221,15 @@ export function applyPatch(item: WorkItem, patch: WorkItemPatch, opts: { now: Da
   if (patch.machine !== undefined) next.machine = optStr(patch.machine);
   if (patch.dispatchId !== undefined) next.dispatchId = optStr(patch.dispatchId);
   if (patch.draft !== undefined) next.draft = patch.draft;
+  if (patch.linkSession) {
+    const link = sessionLink(patch.linkSession, at);
+    const sessions = [...(item.sessions ?? [])];
+    const i = sessions.findIndex((x) => x.sessionId === link.sessionId);
+    if (i === -1) sessions.push(link);
+    else sessions[i] = { ...sessions[i], ...Object.fromEntries(Object.entries(link).filter(([, v]) => v !== null)) } as SessionLink;
+    next.sessions = sessions;
+  }
+  if (patch.result !== undefined) next.result = patch.result === null ? null : runResult(patch.result, at);
   if (patch.stage !== undefined) {
     const to = oneOf(STAGES, patch.stage, "stage");
     if (to !== item.stage) {

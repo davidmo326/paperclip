@@ -28,7 +28,7 @@ export interface ObsidianBriefWriteResult {
    * differs — regeneration would destroy them, so the write is refused;
    * delete the file to force a regeneration).
    */
-  kind: "wrote" | "unchanged" | "skipped_edited";
+  kind: "wrote" | "unchanged" | "skipped_edited" | "skipped_input_only";
   /** Bytes written / would have been written. */
   byteLength: number;
 }
@@ -72,6 +72,16 @@ export interface WriteObsidianBriefOptions {
  * Idempotent write. Returns `unchanged` when the file already exists with
  * byte-identical content, `wrote` otherwise.
  */
+/**
+ * ControlPlane CONTEXT.md "Vault (input only)": the control plane writes no
+ * briefs, journals or reviews into the vault. Generated documents stay in the
+ * pacc store and reach the principal on the floor. `PACC_VAULT_WRITES=on`
+ * restores the old behaviour (tests, or a deliberate reversal).
+ */
+export function vaultWritesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return ["on", "true", "1", "yes"].includes((env.PACC_VAULT_WRITES ?? "").trim().toLowerCase());
+}
+
 export async function writeObsidianBrief(
   markdown: string,
   options: WriteObsidianBriefOptions,
@@ -80,6 +90,7 @@ export async function writeObsidianBrief(
   const filename = `${prefix}${options.briefDate}.md`;
   const targetPath = path.join(options.baseDir, filename);
   const byteLength = Buffer.byteLength(markdown, "utf8");
+  if (!vaultWritesEnabled()) return { path: targetPath, kind: "skipped_input_only", byteLength };
 
   // T-6.7b no-clobber guard, checked on both the guarded and legacy paths:
   // a differing render over an annotated brief is a Syncthing-conflict bomb

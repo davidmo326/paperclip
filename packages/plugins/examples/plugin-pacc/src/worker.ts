@@ -23,6 +23,7 @@ import {
   SOURCE_DECAY_STATE_KEY,
   STEWARD_PAUSED_STATE_KEY,
   TELEMETRY_STATE_KEY,
+  STEWARD_JOURNAL_STORE_STATE_KEY,
 } from "./constants.js";
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
@@ -132,6 +133,10 @@ import {
   type WorkItemPatch,
 } from "./lib/work-items/work-items.js";
 import { makeWorkItemDeps } from "./lib/work-items/work-item-deps.js";
+import { makeLineDeps } from "./lib/lines/lines-deps.js";
+import type { LinePatch } from "./lib/lines/lines.js";
+import { renderSnapshot } from "./lib/lines/lines.js";
+import { dispatchCardFor, importLines, recordRunResult, updateLine } from "./lib/lines/floor-actions.js";
 export { STALE_THRESHOLDS_MS };
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1082,93 @@ const plugin: PaperclipPlugin = definePlugin({
       const items = await makeWorkItemDeps(ctx).listItems();
       const projectId = typeof params.projectId === "string" ? params.projectId : "";
       return projectId ? items.filter((i) => i.projectId === projectId) : items;
+    });
+
+    // ADR 0003: project lines are the record for project state.
+    ctx.data.register("list-lines", async () => {
+      return await makeLineDeps(ctx).listLines();
+    });
+
+    ctx.data.register("lines-snapshot", async () => {
+      return { body: renderSnapshot(await makeLineDeps(ctx).listLines()) };
+    });
+
+    ctx.actions.register("update-line", async (params) => {
+      const id = typeof params.id === "string" ? params.id : "";
+      if (!id) throw new Error("id is required");
+      const actor = typeof params.actor === "string" && params.actor ? params.actor : "principal";
+      return await updateLine(makeLineDeps(ctx), id, (params.patch ?? {}) as LinePatch, { now: new Date(), actor });
+    });
+
+    // One-time takeover of the portfolio seed (missing-only unless mode=overwrite).
+    ctx.actions.register("import-lines", async (params) => {
+      const seed = Array.isArray(params.seed) ? (params.seed as unknown[]) : [];
+      if (seed.length === 0) throw new Error("seed (array) is required");
+      // Carry the legacy Paperclip project ids so per-project plugin state still joins.
+      const legacyByName: Record<string, string> = {};
+      try {
+        const companies = await ctx.companies.list({ limit: 10, offset: 0 });
+        for (const c of companies) {
+          for (const p of await ctx.projects.list({ companyId: c.id, limit: 500, offset: 0 })) {
+            legacyByName[p.name] = p.id;
+          }
+        }
+      } catch {
+        // no legacy projects visible — lines still import
+      }
+      return await importLines(makeLineDeps(ctx), seed, {
+        now: new Date(),
+        actor: typeof params.actor === "string" && params.actor ? params.actor : "principal",
+        legacyByName,
+        mode: params.mode === "overwrite" ? "overwrite" : "missing-only",
+      });
+    });
+
+    // Context carry — outbound: the card a hand receives with its task.
+    ctx.data.register("dispatch-card", async (params) => {
+      const itemId = typeof params.itemId === "string" ? params.itemId : "";
+      if (!itemId) throw new Error("itemId is required");
+      const { card } = await dispatchCardFor({ lines: makeLineDeps(ctx), items: makeWorkItemDeps(ctx) }, itemId);
+      return { card };
+    });
+
+    // Context carry — return: what a hand brought back.
+    ctx.actions.register("record-run-result", async (params) => {
+      const s = (k: string) => (typeof params[k] === "string" && params[k] ? (params[k] as string) : null);
+      const itemId = s("itemId");
+      if (!itemId) throw new Error("itemId is required");
+      return await recordRunResult(
+        { lines: makeLineDeps(ctx), items: makeWorkItemDeps(ctx) },
+        {
+          itemId,
+          output: s("output") ?? "",
+          ok: params.ok !== false,
+          sessionId: s("sessionId"),
+          machine: s("machine"),
+          tool: s("tool"),
+          worker: s("worker"),
+          cwd: s("cwd"),
+          costUsd: typeof params.costUsd === "number" ? params.costUsd : null,
+          commandId: s("commandId"),
+        },
+        new Date(),
+      );
+    });
+
+    // The chief of staff's latest journal, for the surface (vault is input only).
+    ctx.data.register("steward-latest", async () => {
+      const today = new Date();
+      for (let back = 0; back < 14; back++) {
+        const d = new Date(today.getTime() - back * 86_400_000);
+        const date = d.toISOString().slice(0, 10);
+        const journal = await ctx.state.get({
+          scopeKind: "instance",
+          namespace: date,
+          stateKey: STEWARD_JOURNAL_STORE_STATE_KEY,
+        });
+        if (journal) return { journal };
+      }
+      return { journal: null };
     });
 
     // T-floor: capacity score per day (J reads `Capacity: N/10`; no note = zero).

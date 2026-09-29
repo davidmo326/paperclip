@@ -1,12 +1,5 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
-import {
-  EXPORT_NAMES,
-  JOB_KEYS,
-  PAGE_ROUTE,
-  PLUGIN_ID,
-  PLUGIN_VERSION,
-  SLOT_IDS,
-} from "./constants.js";
+import { JOB_KEYS, PLUGIN_ID, PLUGIN_VERSION } from "./constants.js";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
@@ -96,50 +89,11 @@ const manifest: PaperclipPluginManifestV1 = {
       schedule: "*/5 * * * *", // every 5 minutes
     },
   ],
+  // ControlPlane ADR 0002 + CONTEXT.md "Substrate (Paperclip)": the principal
+  // never opens Paperclip's UI — the cockpit floor is the only surface. The UI
+  // bundle still builds (dist/ui) but registers no slots.
   ui: {
-    slots: [
-      {
-        type: "page",
-        id: SLOT_IDS.page,
-        displayName: "Portfolio (pacc)",
-        exportName: EXPORT_NAMES.page,
-        routePath: PAGE_ROUTE,
-      },
-      {
-        type: "dashboardWidget",
-        id: SLOT_IDS.dashboardWidget,
-        displayName: "Portfolio (pacc)",
-        exportName: EXPORT_NAMES.dashboardWidget,
-      },
-      {
-        type: "projectSidebarItem",
-        id: SLOT_IDS.projectSidebarItem,
-        displayName: "Control Plane",
-        exportName: EXPORT_NAMES.projectSidebarItem,
-        entityTypes: ["project"],
-      },
-      {
-        type: "detailTab",
-        id: SLOT_IDS.projectTab,
-        displayName: "Control Plane",
-        exportName: EXPORT_NAMES.projectTab,
-        entityTypes: ["project"],
-      },
-      {
-        type: "toolbarButton",
-        id: SLOT_IDS.toolbarButton,
-        displayName: "Control Plane",
-        exportName: EXPORT_NAMES.toolbarButton,
-        entityTypes: ["project"],
-      },
-      {
-        type: "contextMenuItem",
-        id: SLOT_IDS.contextMenuItem,
-        displayName: "Control Plane",
-        exportName: EXPORT_NAMES.contextMenuItem,
-        entityTypes: ["project"],
-      },
-    ],
+    slots: [],
   },
 };
 

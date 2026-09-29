@@ -29,6 +29,10 @@ import { renderBriefMarkdown } from "../briefer/render.js";
 import { BRIEFER_DEFAULT_MODEL } from "../briefer/briefer.js";
 import { createValueAnchorService } from "../value-anchor/service.js";
 import { resolveVaultRoot } from "../vault-root.js";
+import { makeLineDeps } from "../lines/lines-deps.js";
+import { promoteJournalToFloor } from "../lines/floor-actions.js";
+import { makeWorkItemDeps } from "../work-items/work-item-deps.js";
+import { vaultWritesEnabled } from "../briefer/obsidian-writer.js";
 import { STEWARD_ACTOR, assertStewardL1, type StewardDeps } from "./steward.js";
 import type { ScheduledStewardDeps } from "./scheduled-steward.js";
 import {
@@ -210,6 +214,20 @@ export function makeStewardDeps(
         journalDate: journal.journalDate,
         projectCardKeys,
       });
+      // The journal reaches the surface as Triage items (vault is input only).
+      try {
+        const promoted = await promoteJournalToFloor(
+          { lines: makeLineDeps(ctx), items: makeWorkItemDeps(ctx) },
+          journal,
+          new Date(),
+        );
+        ctx.logger.info("steward: journal promoted to floor", {
+          created: promoted.created.length,
+          unmatched: promoted.unmatched,
+        });
+      } catch (err) {
+        ctx.logger.warn("steward: journal promotion failed", { error: String(err) });
+      }
       return { id: `steward-journal-${journal.journalDate}` };
     },
     async writeDraft(targetPath, content) {
@@ -218,6 +236,10 @@ export function makeStewardDeps(
       }
       if (targetPath.includes("..")) {
         throw new Error(`steward draft path must not traverse (got ${targetPath})`);
+      }
+      if (!vaultWritesEnabled()) {
+        // Vault is input only: drafts reach the principal as Triage items instead.
+        return { path: targetPath, kind: "unchanged" as const };
       }
       if (guard === undefined) {
         throw new Error("steward writeDraft: no M1b mediator wired — refusing bare write");

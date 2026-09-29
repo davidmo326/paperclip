@@ -42,6 +42,9 @@ import {
   SOURCE_DECAY_STATE_KEY,
   BRIEF_IN_PROGRESS_STATE_KEY,
 } from "../../constants.js";
+import { makeLineDeps } from "../lines/lines-deps.js";
+import { lineToControlPlaneState, type ProjectLine } from "../lines/lines.js";
+import type { DecisionCtx } from "../decisions/decision-deps.js";
 import { buildContextCard, type AssociatedNoteSummary, type ContextCard } from "../context-card.js";
 import type { ProjectFreshnessRecord } from "../../jobs/stale-rehash.js";
 import type { ProjectDecayRecord } from "../../jobs/source-decay-check.js";
@@ -420,6 +423,17 @@ async function buildSeedJoin(ctx: WorkerCtx): Promise<{
   return { slugByName, spineBySlug };
 }
 
+async function listRecordLines(ctx: WorkerCtx): Promise<ProjectLine[] | null> {
+  const withEntities = ctx as WorkerCtx & Partial<DecisionCtx>;
+  if (!withEntities.entities) return null;
+  try {
+    const lines = await makeLineDeps(withEntities as DecisionCtx).listLines();
+    return lines.length > 0 ? lines : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProjectInput[]> {
   const companies = await ctx.companies.list({ limit: 200, offset: 0 });
   // T-2.10: ground the brief in the association catalog (slug-keyed), joined to
@@ -433,8 +447,23 @@ export async function assembleProjectCards(ctx: WorkerCtx): Promise<BrieferProje
   ]);
   const cards: BrieferProjectInput[] = [];
 
-  for (const company of companies) {
-    const projects = await ctx.projects.list({ companyId: company.id, limit: 200, offset: 0 });
+  // ADR 0003: project lines are the record. When the record holds lines, the
+  // cards come from it; Paperclip's projects table is only the pre-record
+  // fallback (and the source of legacy ids for per-project plugin state).
+  const recordLines = await listRecordLines(ctx);
+  const sources: Array<Array<WorkerCtxProject>> = recordLines
+    ? [
+        recordLines.map((l) => ({
+          id: l.legacyProjectId ?? l.id,
+          name: l.name,
+          controlPlaneState: lineToControlPlaneState(l),
+        })),
+      ]
+    : await Promise.all(
+        companies.map((company) => ctx.projects.list({ companyId: company.id, limit: 200, offset: 0 })),
+      );
+
+  for (const projects of sources) {
     for (const project of projects) {
       const cps = (project.controlPlaneState ?? null) as Record<string, unknown> | null;
       // Skip closed projects — they don't belong in the daily brief.
