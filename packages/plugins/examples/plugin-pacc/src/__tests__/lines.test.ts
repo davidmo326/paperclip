@@ -265,3 +265,17 @@ describe("CoS allocation (L6)", () => {
     expect(floor.capacity.recorded).toBe(false);
   });
 });
+
+describe("CoS on the principal's Claude subscription", () => {
+  it("strips provider overrides, skips user settings and restores HOME", async () => {
+    const { cliAuthEnv } = await import("../lib/briefer/model-claude-cli.js");
+    const base = { PATH: "/usr/bin", ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: "x", PACC_STEWARD_MODEL: "m" };
+    const sub = cliAuthEnv("subscription", base);
+    expect(sub.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(sub.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(sub.env.PACC_STEWARD_MODEL).toBe("m");
+    expect(typeof sub.env.HOME).toBe("string");
+    expect(sub.argv).toEqual(["--setting-sources", "project,local"]);
+    expect(cliAuthEnv("env", base).env).toBe(base);
+  });
+});

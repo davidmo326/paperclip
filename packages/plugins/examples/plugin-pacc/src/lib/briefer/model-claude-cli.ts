@@ -20,6 +20,7 @@
  */
 
 import { spawn as nodeSpawn } from "node:child_process";
+import { tmpdir, userInfo } from "node:os";
 import type { SpawnOptionsWithoutStdio } from "node:child_process";
 
 export interface ClaudeCliModelOptions {
@@ -36,6 +37,39 @@ export interface ClaudeCliModelOptions {
   spawnFn?: typeof nodeSpawn;
   /** Optional logger for diagnostics on the degradation path. */
   logger?: { warn(msg: string, fields?: Record<string, unknown>): void };
+  /**
+   * `env` (default): the CLI authenticates however the inherited environment
+   * says (e.g. ANTHROPIC_BASE_URL/AUTH_TOKEN → z.ai). `subscription`: use the
+   * principal's Claude login — provider overrides are stripped, the user's
+   * settings (which route to z.ai) are skipped, and HOME is restored so the
+   * CLI finds its OAuth credentials (plugin workers run without HOME).
+   */
+  auth?: "env" | "subscription";
+  /** `--effort` level (low | medium | high | …); omitted = CLI default. */
+  effort?: string;
+}
+
+const PROVIDER_ENV_KEYS = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_MODEL",
+];
+
+/** Spawn environment + extra argv for an auth mode (exported for tests). */
+export function cliAuthEnv(
+  auth: "env" | "subscription",
+  base: NodeJS.ProcessEnv = process.env,
+): { env: NodeJS.ProcessEnv; argv: string[] } {
+  if (auth !== "subscription") return { env: base, argv: [] };
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const k of PROVIDER_ENV_KEYS) delete env[k];
+  if (!env.HOME) env.HOME = userInfo().homedir;
+  if (!env.PATH) env.PATH = "/usr/local/bin:/usr/bin:/bin";
+  return { env, argv: ["--setting-sources", "project,local"] };
 }
 
 export interface CallModelArgs {
@@ -66,16 +100,19 @@ export async function callModelViaClaudeCli(
   const timeoutMs = opts.timeoutMs ?? 120_000;
   const spawnFn = opts.spawnFn ?? nodeSpawn;
 
-  const argv = ["-p", args.prompt, "--model", args.modelId, "--output-format", "json"];
+  const auth = cliAuthEnv(opts.auth ?? "env");
+  const argv = ["-p", args.prompt, "--model", args.modelId, "--output-format", "json", ...auth.argv];
+  if (opts.effort) argv.push("--effort", opts.effort);
   if (args.systemPrompt && args.systemPrompt.trim().length > 0) {
     argv.push("--append-system-prompt", args.systemPrompt);
   }
 
   const spawnOpts: SpawnOptionsWithoutStdio = {
-    cwd: opts.cwd,
+    // subscription runs start somewhere neutral so no repo's project settings apply
+    cwd: opts.cwd ?? (opts.auth === "subscription" ? tmpdir() : undefined),
     // Never use a shell — prompt is argv, not an interpolated string.
     shell: false,
-    env: process.env,
+    env: auth.env,
   };
 
   return await new Promise<CallModelResult>((resolve) => {

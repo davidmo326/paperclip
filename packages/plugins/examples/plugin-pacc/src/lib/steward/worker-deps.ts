@@ -102,13 +102,15 @@ export function resolveStewardModelConfig(
   if (["off", "false", "0", "none", "no"].includes(lc)) return offline;
   const modelId = ["on", "true", "1", "default", "yes"].includes(lc) ? BRIEFER_DEFAULT_MODEL : raw;
   const binPath = env.PACC_CLAUDE_BIN?.trim() || undefined;
-  const timeoutMs = env.PACC_STEWARD_MODEL_TIMEOUT_MS
-    ? Number(env.PACC_STEWARD_MODEL_TIMEOUT_MS)
-    : undefined;
+  // A CoS pass over the whole floor takes minutes, not the CLI provider's
+  // 120s default (which silently degraded runs to the deterministic journal).
+  const timeoutMs = env.PACC_STEWARD_MODEL_TIMEOUT_MS ? Number(env.PACC_STEWARD_MODEL_TIMEOUT_MS) : 600_000;
+  const auth = env.PACC_STEWARD_AUTH?.trim().toLowerCase() === "subscription" ? "subscription" : "env";
+  const effort = env.PACC_STEWARD_EFFORT?.trim() || undefined;
   return {
     enabled: true,
     modelId,
-    callModel: (args) => callModelViaClaudeCli(args, { binPath, timeoutMs, logger }),
+    callModel: (args) => callModelViaClaudeCli(args, { binPath, timeoutMs, logger, auth, effort }),
   };
 }
 
