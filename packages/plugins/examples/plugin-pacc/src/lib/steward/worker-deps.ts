@@ -7,6 +7,7 @@
  * approvals surface) and at runtime (proposeM2 throws above L1).
  */
 
+import { callModelViaMessagesApi } from "../briefer/model-messages-api.js";
 import type { AuthorityLevel } from "@paperclipai/shared";
 import type { BrieferProjectInput, ValueAnchorSummary } from "../briefer/types.js";
 import type { WorkerCtx } from "../briefer/worker-deps.js";
@@ -105,7 +106,16 @@ export function resolveStewardModelConfig(
   // A CoS pass over the whole floor takes minutes, not the CLI provider's
   // 120s default (which silently degraded runs to the deterministic journal).
   const timeoutMs = env.PACC_STEWARD_MODEL_TIMEOUT_MS ? Number(env.PACC_STEWARD_MODEL_TIMEOUT_MS) : 600_000;
-  const auth = env.PACC_STEWARD_AUTH?.trim().toLowerCase() === "subscription" ? "subscription" : "env";
+  const mode = env.PACC_STEWARD_AUTH?.trim().toLowerCase();
+  if (mode === "api") {
+    // z.ai (GLM) via the Anthropic-compatible Messages API — the CLI refuses GLM ids in print mode
+    return {
+      enabled: true,
+      modelId,
+      callModel: (args) => callModelViaMessagesApi(args, { timeoutMs, logger }),
+    };
+  }
+  const auth = mode === "subscription" ? "subscription" : "env";
   const effort = env.PACC_STEWARD_EFFORT?.trim() || undefined;
   return {
     enabled: true,

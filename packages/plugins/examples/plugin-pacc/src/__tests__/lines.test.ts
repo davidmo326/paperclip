@@ -279,3 +279,21 @@ describe("CoS on the principal's Claude subscription", () => {
     expect(cliAuthEnv("env", base).env).toBe(base);
   });
 });
+
+describe("CoS over an Anthropic-compatible Messages API (z.ai GLM)", () => {
+  it("posts the prompt and returns text; degrades on errors", async () => {
+    const { callModelViaMessagesApi } = await import("../lib/briefer/model-messages-api.js");
+    let seen: { url: string; body: Record<string, unknown> } | null = null;
+    const ok = (async (url: string, init: RequestInit) => {
+      seen = { url, body: JSON.parse(String(init.body)) };
+      return new Response(JSON.stringify({ id: "m1", content: [{ type: "text", text: "{}" }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const r = await callModelViaMessagesApi({ modelId: "glm-5.3", prompt: "p" }, { baseUrl: "https://z/api/anthropic/", token: "t", fetchFn: ok });
+    expect(r).toEqual({ text: "{}", sessionId: "m1" });
+    expect(seen!.url).toBe("https://z/api/anthropic/v1/messages");
+    expect(seen!.body.model).toBe("glm-5.3");
+    const bad = (async () => new Response(JSON.stringify({ error: { message: "unknown model" } }), { status: 400 })) as unknown as typeof fetch;
+    expect((await callModelViaMessagesApi({ modelId: "x", prompt: "p" }, { baseUrl: "https://z", token: "t", fetchFn: bad })).text).toBeNull();
+    expect((await callModelViaMessagesApi({ modelId: "x", prompt: "p" }, { baseUrl: "", token: "" })).text).toBeNull();
+  });
+});
