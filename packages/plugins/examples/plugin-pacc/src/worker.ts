@@ -136,6 +136,7 @@ import { makeWorkItemDeps } from "./lib/work-items/work-item-deps.js";
 import { makeLineDeps } from "./lib/lines/lines-deps.js";
 import type { LinePatch } from "./lib/lines/lines.js";
 import { renderSnapshot } from "./lib/lines/lines.js";
+import { promoteEntry, reconcileBacklog, summarizeBacklog, updateBacklogEntry } from "./lib/lines/backlog.js";
 import { dispatchCardFor, importLines, recordRunResult, updateLine } from "./lib/lines/floor-actions.js";
 export { STALE_THRESHOLDS_MS };
 
@@ -1103,7 +1104,46 @@ const plugin: PaperclipPlugin = definePlugin({
 
     // ADR 0003: project lines are the record for project state.
     ctx.data.register("list-lines", async () => {
-      return await makeLineDeps(ctx).listLines();
+      // the backlog stays behind the line: callers get a summary, the tree via get-backlog
+      return (await makeLineDeps(ctx).listLines()).map(({ backlog, ...l }) => ({ ...l, backlogSummary: summarizeBacklog(backlog) }));
+    });
+
+    // The reconciled pile behind a line (CONTEXT.md: Backlog).
+    ctx.data.register("get-backlog", async (params) => {
+      const line = await makeLineDeps(ctx).getLine(typeof params.id === "string" ? params.id : "");
+      if (!line) throw new Error("no such line");
+      return { backlog: line.backlog ?? null };
+    });
+
+    ctx.actions.register("reconcile-backlog", async (params) => {
+      const deps = makeLineDeps(ctx);
+      const line = await deps.getLine(typeof params.id === "string" ? params.id : "");
+      if (!line) throw new Error("no such line");
+      const input = (params.backlog ?? {}) as Record<string, unknown>;
+      const backlog = reconcileBacklog(line.backlog, input, { now: new Date(), by: typeof params.by === "string" ? params.by : "reconciler" });
+      await deps.putLine({ ...line, backlog });
+      return { summary: summarizeBacklog(backlog) };
+    });
+
+    ctx.actions.register("update-backlog-entry", async (params) => {
+      const deps = makeLineDeps(ctx);
+      const line = await deps.getLine(typeof params.id === "string" ? params.id : "");
+      if (!line?.backlog) throw new Error("no backlog on that line");
+      const backlog = updateBacklogEntry(line.backlog, String(params.entryId ?? ""), (params.patch ?? {}) as { status?: unknown; text?: unknown }, new Date());
+      await deps.putLine({ ...line, backlog });
+      return { entry: backlog.entries.find((e) => e.id === params.entryId) };
+    });
+
+    ctx.actions.register("promote-backlog-entry", async (params) => {
+      const deps = makeLineDeps(ctx);
+      const items = makeWorkItemDeps(ctx);
+      const line = await deps.getLine(typeof params.id === "string" ? params.id : "");
+      if (!line?.backlog) throw new Error("no backlog on that line");
+      const to = params.to === "kq" || params.to === "candidate" ? params.to : "triage";
+      const out = promoteEntry(line, line.backlog, String(params.entryId ?? ""), to, { now: new Date(), newId: () => items.newId() });
+      if (out.item) await items.putItem(out.item);
+      await deps.putLine({ ...out.line, backlog: out.backlog });
+      return { item: out.item, line: { ...out.line, backlog: undefined } };
     });
 
     ctx.data.register("lines-snapshot", async () => {

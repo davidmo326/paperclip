@@ -297,3 +297,49 @@ describe("CoS over an Anthropic-compatible Messages API (z.ai GLM)", () => {
     expect((await callModelViaMessagesApi({ modelId: "x", prompt: "p" }, { baseUrl: "", token: "" })).text).toBeNull();
   });
 });
+
+describe("line backlog (the reconciled pile)", () => {
+  const input = {
+    sourcesRead: [{ path: "/home/david/Obsidian/10_Builds/Hometrics/plan.md", kind: "plan", why: "bets" }],
+    questions: [{ id: "q1", text: "Will owners pay?", status: "open", sourceRefs: [{ path: "~/Obsidian/x.md" }] }],
+    hypotheses: [{ id: "h1", parent: "q1", text: "Anxious buyers pay for a walkthrough", status: "untested", test: "1 of 3 books", sourceRefs: [] }],
+    tasks: [
+      { id: "t1", parent: "h1", text: "Message one buyer", workType: "market-contact", size: "bite", status: "todo", sourceRefs: [] },
+      { id: "t2", parent: "zz", text: "Orphan task", workType: "nonsense", size: "huge", status: "weird", alreadyOnFloor: true, sourceRefs: [] },
+    ],
+    conflicts: ["board says done, plan says pending"],
+    notes: "early",
+  };
+
+  it("normalises reconciler output and keeps the principal's decisions across re-runs", async () => {
+    const { reconcileBacklog, updateBacklogEntry, summarizeBacklog } = await import("../lib/lines/backlog.js");
+    const b1 = reconcileBacklog(null, input, { now: NOW, by: "reconciler" });
+    expect(b1.entries.map((e) => [e.id, e.kind, e.parent, e.status])).toEqual([
+      ["q1", "question", null, "open"],
+      ["h1", "hypothesis", "q1", "untested"],
+      ["t1", "task", "h1", "todo"],
+      ["t2", "task", null, "todo"],
+    ]);
+    expect(b1.entries[3]).toMatchObject({ workType: "build", size: "bite", promotedTo: "floor" });
+    expect(b1.sources[0]?.path).toBe("~/Obsidian/10_Builds/Hometrics/plan.md");
+    expect(summarizeBacklog(b1)).toMatchObject({ questions: 1, hypotheses: 1, tasks: 2, openTasks: 1 });
+    const b2 = updateBacklogEntry(b1, "t1", { status: "dropped" }, NOW);
+    const b3 = reconcileBacklog(b2, input, { now: NOW, by: "reconciler" });
+    expect(b3.entries.find((e) => e.text === "Message one buyer")?.status).toBe("dropped");
+    expect(() => updateBacklogEntry(b1, "q1", { status: "done" }, NOW)).toThrow();
+  });
+
+  it("promotes a task to Triage with its lineage, and a question to the key question", async () => {
+    const { reconcileBacklog, promoteEntry } = await import("../lib/lines/backlog.js");
+    const line = lineFromSeed(SEED, { now: NOW, actor: "principal" });
+    const b = reconcileBacklog(null, input, { now: NOW, by: "reconciler" });
+    const t = promoteEntry(line, b, "t1", "triage", { now: NOW, newId: () => "w1" });
+    expect(t.item).toMatchObject({ id: "w1", stage: "triage", workType: "market-contact", keyQuestion: "Will owners pay?" });
+    expect(t.item?.detail).toContain("Hypothesis: Anxious buyers pay");
+    expect(t.backlog.entries.find((e) => e.id === "t1")).toMatchObject({ promotedTo: "w1", status: "doing" });
+    const q = promoteEntry(line, b, "q1", "kq", { now: NOW, newId: () => "w2" });
+    expect(q.line.keyQuestion).toBe("Will owners pay?");
+    expect(q.line.keyQuestionCandidates[0]).toBe("Will 3 owners use it weekly?");
+    expect(() => promoteEntry(line, b, "q1", "triage", { now: NOW, newId: () => "x" })).toThrow();
+  });
+});

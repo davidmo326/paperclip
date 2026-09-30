@@ -14,6 +14,7 @@
  */
 
 import { sourceRefSchema } from "@paperclipai/shared";
+import type { Backlog } from "./backlog.js";
 
 export interface GroundingRef {
   kind: string;
@@ -61,6 +62,8 @@ export interface ProjectLine {
   updatedAt: string;
   updatedBy: string;
   edits: LineEdit[];
+  /** The reconciled pile behind the line (questions → hypotheses → tasks). */
+  backlog?: Backlog | null;
 }
 
 export class LineValidationError extends Error {}
@@ -156,6 +159,7 @@ const MODELLED_SEED_KEYS = new Set([
   "lastMeaningfulActivityAt",
   "lastEvidenceAt",
   "legacyProjectId",
+  "backlog",
 ]);
 
 /** Build a line from one portfolio-seed entry (the one-time takeover, and tests). */
@@ -282,6 +286,7 @@ const SNAPSHOT_ORDER = [
   "groundingRefs",
   "sourceRefs",
   "visionRefs",
+  "backlog",
 ] as const;
 
 /** One seed-snapshot entry for a line — deterministic for identical lines. */
