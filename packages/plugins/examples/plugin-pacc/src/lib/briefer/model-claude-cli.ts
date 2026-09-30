@@ -133,6 +133,8 @@ export async function callModelViaClaudeCli(
       done({ text: null, sessionId: null }, `spawn threw: ${errMsg(err)}`);
       return;
     }
+    // the prompt is argv — close stdin so the CLI doesn't wait on it (and warn)
+    child.stdin?.end();
 
     const timer = setTimeout(() => {
       try {
