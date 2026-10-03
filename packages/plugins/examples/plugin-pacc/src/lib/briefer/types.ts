@@ -17,6 +17,7 @@
  */
 
 import type { AuthorityLevel } from "@paperclipai/shared";
+import type { JobActivity } from "./job-mix.js";
 import type {
   AnswerWithCitations,
   ContextCard,
@@ -321,6 +322,13 @@ export interface BrieferDeps {
    * project renders (first-run behaviour; nothing is quiet).
    */
   readLastBriefDelta?(): Promise<BriefDeltaRecord | null>;
+
+  /**
+   * T-jev: the job-mix activity stream (one entry per worked floor item, with
+   * its stored job class). Optional — when absent, or empty, job-mix falls back
+   * to each project's dominant class.
+   */
+  listJobActivities?(): Promise<JobActivity[]>;
 
   /**
    * L1 propose-only. Wraps the platform's proposeM2 with an L1 ceiling

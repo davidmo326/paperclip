@@ -266,8 +266,9 @@ export async function runBriefer(
   const projectNames: Record<string, string> = {};
   for (const p of projects) projectNames[p.projectId] = p.projectName;
 
-  // Job-mix table (T-3.4) — compute from the cards (no activity stream yet, so
-  // it falls back to each project's dominant job class).
+  // Job-mix table (T-3.4) — the floor's activity stream when T-jev feeds one;
+  // projects with no classified activity fall back to their dominant class.
+  const jobActivities = (await deps.listJobActivities?.()) ?? [];
   const jobMix = computeJobMix(
     projects.map((p) => ({
       projectId: p.projectId,
@@ -276,7 +277,7 @@ export async function runBriefer(
       jobClassificationDominant:
         (p.card as { jobClassificationDominant?: JobClass | null }).jobClassificationDominant ?? null,
     })),
-    [],
+    jobActivities,
     { now },
   );
 

@@ -28,6 +28,7 @@
  * unit-testable with a stub ctx.
  */
 
+import { refreshJobClasses } from "../job-class/job-class-deps.js";
 import {
   BRIEFER_PAUSED_STATE_KEY,
   BRIEFER_PAUSE_AUDIT_STATE_KEY,
@@ -544,6 +545,11 @@ export function makeBrieferDeps(
   return {
     async listActiveProjectCards() {
       return cards;
+    },
+    async listJobActivities() {
+      const withEntities = ctx as WorkerCtx & Partial<DecisionCtx>;
+      if (!withEntities.entities) return [];
+      return (await refreshJobClasses(withEntities as DecisionCtx, ctx.logger)).activities;
     },
     async listValueAnchors() {
       if (anchorCache) return anchorCache;

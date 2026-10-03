@@ -56,6 +56,8 @@ import {
 import type { AuthorityLevel } from "@paperclipai/shared";
 import { writeObsidianBrief } from "./lib/briefer/obsidian-writer.js";
 import { computeJobMix, type JobMixProjectInput, type JobMixPhase } from "./lib/briefer/job-mix.js";
+import { makeJobClassStore, refreshJobClasses, resolveJobClassConfig } from "./lib/job-class/job-class-deps.js";
+import { JOB_CLASSES, effectiveJobClass, isJobClass, jobClassAgreement } from "./lib/job-class/job-class.js";
 import {
   buildWeeklyReview,
   renderWeeklyReviewMarkdown,
@@ -673,7 +675,7 @@ const plugin: PaperclipPlugin = definePlugin({
             (c.card as { jobClassificationDominant?: JobMixProjectInput["jobClassificationDominant"] })
               .jobClassificationDominant ?? null,
         }));
-        const jobMix = computeJobMix(jobMixInputs, [], { now });
+        const jobMix = computeJobMix(jobMixInputs, (await refreshJobClasses(ctx, ctx.logger, { now })).activities, { now });
         // T-4.7: decisions past their reviewDate with no outcome yet.
         const decisionDeps = makeDecisionDeps(ctx);
         const projectNameById = new Map(cards.map((c) => [c.projectId, c.projectName]));
@@ -1100,6 +1102,55 @@ const plugin: PaperclipPlugin = definePlugin({
       const items = await makeWorkItemDeps(ctx).listItems();
       const projectId = typeof params.projectId === "string" ? params.projectId : "";
       return projectId ? items.filter((i) => i.projectId === projectId) : items;
+    });
+
+    // T-jev: job classes of worked floor items — the review surface for the
+    // Jev shadow trial (principal label vs Jev, agreement). Read-only.
+    ctx.data.register("job-class-review", async () => {
+      const config = resolveJobClassConfig();
+      const [records, items] = await Promise.all([makeJobClassStore(ctx).list(), makeWorkItemDeps(ctx).listItems()]);
+      const byId = new Map(items.map((i) => [i.id, i]));
+      const rows = records
+        .filter((r) => byId.has(r.itemId))
+        .map((r) => {
+          const item = byId.get(r.itemId)!;
+          return {
+            itemId: r.itemId,
+            projectId: r.projectId,
+            title: item.title,
+            workType: item.workType,
+            stage: item.stage,
+            rule: r.rule,
+            jev: r.jev,
+            jevError: r.jevError,
+            principal: r.principal?.jobClass ?? null,
+            effective: effectiveJobClass(r, config.minProbability),
+          };
+        })
+        .sort((a, b) => a.projectId.localeCompare(b.projectId) || a.title.localeCompare(b.title));
+      return { mode: config.mode, minProbability: config.minProbability, agreement: jobClassAgreement(records, config.minProbability), rows };
+    });
+
+    // T-jev: one labelling pass now (classifies anything new). Runs in shadow
+    // mode when the configured mode is off, so the trial can start before the
+    // brief is switched over.
+    ctx.actions.register("refresh-job-classes", async () => {
+      const config = resolveJobClassConfig();
+      const r = await refreshJobClasses(ctx, ctx.logger, { config: { ...config, mode: config.mode === "off" ? "shadow" : config.mode } });
+      return { mode: config.mode, jevConfigured: config.jevConfigured, calls: r.calls, errors: r.errors, changed: r.changed.length, records: r.records.size };
+    });
+
+    ctx.actions.register("set-job-class", async (params) => {
+      const itemId = typeof params.itemId === "string" ? params.itemId : "";
+      const jobClass = params.jobClass === null ? null : params.jobClass;
+      if (!itemId) throw new Error("itemId is required");
+      if (jobClass !== null && !isJobClass(jobClass)) throw new Error(`jobClass must be one of ${JOB_CLASSES.join(", ")} or null`);
+      const store = makeJobClassStore(ctx);
+      const rec = (await store.list()).find((r) => r.itemId === itemId);
+      if (!rec) throw new Error(`no job-class record for ${itemId} — run refresh-job-classes first`);
+      const next = { ...rec, principal: jobClass === null ? null : { jobClass, at: new Date().toISOString() } };
+      await store.put(next);
+      return { record: next };
     });
 
     // ADR 0003: project lines are the record for project state.
