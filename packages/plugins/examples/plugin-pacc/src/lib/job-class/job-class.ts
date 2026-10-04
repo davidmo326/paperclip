@@ -24,29 +24,42 @@ import type { Stage, WorkItem, WorkType } from "../work-items/work-items.js";
 
 export const JOB_CLASSES: readonly JobClass[] = ["J1_signal", "J2_distribution", "J3_product", "meta"];
 
-/** Jev choice criteria — the PRD § 0.5 definitions, phrased for a single work item. */
+/**
+ * Jev choice criteria. v2 (2026-10-04, principal's rubric): classify by what
+ * the task's output is for, not by the kind of activity. J1 is the contact act
+ * only; desk work splits into targeting/reach (J2) and build/think (J3); meta is
+ * the principal's own operating system. J3 deliberately broadens the PRD's
+ * "product" to all project desk work, so analysis never inflates J1.
+ */
+export const JOB_CLASS_CRITERIA_VERSION = 2;
+
 export const JOB_CLASS_CRITERIA: Record<JobClass, string> = {
   J1_signal:
-    "Customer signal: talking to prospects or users, discovery calls, outreach that asks for a reply, LOIs, deposits, pricing tests, or designing and running a test of whether a real customer has the problem or will pay.",
+    "Signal: the customer contact act itself — sending outreach, booking or holding a call or meeting, following up, asking for a reply, LOI, deposit or payment, logging what the person said right after the contact, and harvesting prospects' own words from where they talk (social listening for verbatims). Other desk work before or after contact is not J1.",
   J2_distribution:
-    "Distribution: reaching more of the right people for something that already exists — content, landing pages, channels, SEO, listings, partnerships, launch and marketing work.",
+    "Distribution: reaching and targeting people — choosing the segment, geography, channel or who goes on the list, positioning and messaging, pitch and one-pager wording, landing pages and their intake forms, content and fact-checking it, and setting up the outreach (lists, tracking sheets) that the contact will use.",
   J3_product:
-    "Product: building, fixing, designing or shipping the project's own product or service — features, code, data, infrastructure for that product.",
+    "Build and think: desk work on the project itself — building, fixing or specifying the product or service, its plumbing (code, webhooks, workflows, merges, test runs), research, analysis, and synthesising evidence into the ICP or plan.",
   meta:
-    "Meta: work on the principal's own tooling, control plane, agents, machines, automation or planning system rather than on a project's customers, distribution or product.",
+    "Meta: the founder's own operating system rather than any one project — their control plane, agents, machines and personal tooling, and portfolio admin such as moving key questions between projects or grooming backlogs.",
 };
 
 /** Stages where an item counts as worked on (intake/triage are proposals, not activity). */
 export const ACTIVE_STAGES: ReadonlySet<Stage> = new Set<Stage>(["in-progress", "needs-you", "done"]);
 
-/** The principal's own control-plane line: its work is `meta` by definition (PRD § 0.5 point 3). */
-export const META_LINE_IDS: ReadonlySet<string> = new Set(["personal-ai-control-plane"]);
+/**
+ * Lines whose work is `meta` by definition: the control plane (PRD § 0.5
+ * point 3) and the principal's personal tooling (tax-manager, 2026-10-04).
+ */
+export const META_LINE_IDS: ReadonlySet<string> = new Set(["personal-ai-control-plane", "tax-manager"]);
 
 export interface JevLabel {
   choice: JobClass;
   probability: number;
   model: string | null;
   at: string;
+  /** JOB_CLASS_CRITERIA_VERSION it was asked under (absent = v1). A stale label is re-asked; the principal's label is kept. */
+  criteria?: number;
 }
 
 /**
@@ -129,7 +142,7 @@ export function buildBacklogTaskState(
 export function effectiveJobClass(rec: JobClassRecord, minProbability: number): JobClass | null {
   if (rec.principal) return rec.principal.jobClass;
   if (rec.rule) return rec.rule;
-  if (rec.jev && rec.jev.probability >= minProbability) return rec.jev.choice;
+  if (rec.jev && (rec.jev.criteria ?? 1) === JOB_CLASS_CRITERIA_VERSION && rec.jev.probability >= minProbability) return rec.jev.choice;
   return null;
 }
 
@@ -204,12 +217,13 @@ export async function labelSubjects(
     }
 
     // Asked even when the principal has labelled the subject: that pair is the agreement data.
-    const needsJev = sub.rule === null && rec.jev === null && rec.jevError === null;
+    const staleJev = rec.jev !== null && (rec.jev.criteria ?? 1) !== JOB_CLASS_CRITERIA_VERSION;
+    const needsJev = sub.rule === null && (rec.jev === null || staleJev) && rec.jevError === null;
     if (needsJev && opts.classify && calls < opts.maxCalls) {
       calls += 1;
       try {
         const r = await opts.classify(sub.state());
-        rec = { ...rec, jev: { ...r, at: opts.now.toISOString() } };
+        rec = { ...rec, jev: { ...r, at: opts.now.toISOString(), criteria: JOB_CLASS_CRITERIA_VERSION } };
       } catch (err) {
         errors += 1;
         rec = { ...rec, jevError: (err as Error).message.slice(0, 200) };
@@ -330,7 +344,9 @@ export function jobClassAgreement(records: Iterable<JobClassRecord>, minProbabil
   let confidentCompared = 0;
   let confidentExact = 0;
   for (const r of records) {
-    if (!r.principal || !r.jev) continue;
+    // Rule-labelled subjects aren't Jev's call; stale-criteria labels don't measure today's Jev.
+    if (!r.principal || !r.jev || r.rule !== null) continue;
+    if ((r.jev.criteria ?? 1) !== JOB_CLASS_CRITERIA_VERSION) continue;
     compared += 1;
     const same = r.principal.jobClass === r.jev.choice;
     if (same) exact += 1;

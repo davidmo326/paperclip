@@ -69,7 +69,7 @@ export function applyPaccJevEnv(env: Env = process.env): void {
 const QUESTION: JevChoiceQuestion = {
   type: "choice",
   instructions:
-    "Which of the founder's three jobs (or meta work on their own tooling) does this work item serve? Judge by what the work does, not by the label it was filed under.",
+    "Which of the founder's jobs does this task serve? Judge by what the task's output is for, not by the kind of activity or the label it was filed under. Only the contact act itself is signal; desk work is distribution (targeting and reach) or build-and-think.",
   criteria: JOB_CLASS_CRITERIA,
 };
 

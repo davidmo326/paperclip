@@ -13,6 +13,7 @@ import {
   buildJobClassState,
   contentKeyOf,
   effectiveJobClass,
+  JOB_CLASS_CRITERIA_VERSION,
   jobClassAgreement,
   labelSubjects,
   labelWorkItems,
@@ -66,6 +67,7 @@ describe("ruleJobClass", () => {
     expect(ruleJobClass({ workType: "build", projectId: "personal-ai-control-plane" })).toBe("meta");
     expect(ruleJobClass({ workType: "build", projectId: "hometrics" })).toBeNull();
     expect(ruleJobClass({ workType: "hypothesis-design", projectId: "hometrics" })).toBeNull();
+    expect(ruleJobClass({ workType: "build", projectId: "tax-manager" })).toBe("meta");
   });
 });
 
@@ -89,7 +91,7 @@ describe("labelWorkItems", () => {
     ];
     const first = await labelWorkItems(items, LINES, new Map(), { now: NOW, maxCalls: 10, classify });
     expect(classify).toHaveBeenCalledTimes(1);
-    expect(first.records.get("a")!.jev).toEqual({ choice: "J3_product", probability: 0.82, model: "jev-1.13.0", at: NOW.toISOString() });
+    expect(first.records.get("a")!.jev).toEqual({ choice: "J3_product", probability: 0.82, model: "jev-1.13.0", at: NOW.toISOString(), criteria: JOB_CLASS_CRITERIA_VERSION });
     expect(first.records.get("b")!.rule).toBe("J1_signal");
     expect(first.records.has("c")).toBe(false);
     expect(first.changed.map((r) => r.itemId)).toEqual(["a", "b"]);
@@ -129,6 +131,20 @@ describe("labelWorkItems", () => {
     expect(r.records.get("a")!.principal).toEqual({ jobClass: "J1_signal", at: "x" });
   });
 
+  it("re-asks Jev when its label predates the current criteria, keeping the principal's label", async () => {
+    const classify = jev({ choice: "J2_distribution", probability: 0.8, model: null });
+    const it0 = item({ id: "a" });
+    const prior: JobClassRecord = {
+      itemId: "a", projectId: "hometrics", contentKey: contentKeyOf(it0), rule: null, jevError: null,
+      jev: { choice: "J1_signal", probability: 0.9, model: null, at: "old" },
+      principal: { jobClass: "J2_distribution", at: "x" },
+    };
+    const r = await labelWorkItems([it0], LINES, new Map([["a", prior]]), { now: NOW, maxCalls: 5, classify });
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(r.records.get("a")!.jev).toMatchObject({ choice: "J2_distribution", criteria: JOB_CLASS_CRITERIA_VERSION });
+    expect(r.records.get("a")!.principal).toEqual({ jobClass: "J2_distribution", at: "x" });
+  });
+
   it("records a Jev failure instead of throwing, and doesn't retry it next pass", async () => {
     const classify: ClassifyFn = vi.fn(async () => {
       throw new Error("Jev request failed (500)");
@@ -154,13 +170,14 @@ describe("labelWorkItems", () => {
 describe("effectiveJobClass", () => {
   const base: JobClassRecord = {
     itemId: "a", projectId: "p", contentKey: "k", rule: null,
-    jev: { choice: "J3_product", probability: 0.55, model: null, at: "x" }, jevError: null, principal: null,
+    jev: { choice: "J3_product", probability: 0.55, model: null, at: "x", criteria: JOB_CLASS_CRITERIA_VERSION }, jevError: null, principal: null,
   };
   it("principal > rule > confident Jev > null (D-41)", () => {
     expect(effectiveJobClass(base, 0.6)).toBeNull();
     expect(effectiveJobClass(base, 0.5)).toBe("J3_product");
     expect(effectiveJobClass({ ...base, rule: "J1_signal" }, 0.5)).toBe("J1_signal");
     expect(effectiveJobClass({ ...base, rule: "J1_signal", principal: { jobClass: "meta", at: "x" } }, 0.5)).toBe("meta");
+    expect(effectiveJobClass({ ...base, jev: { ...base.jev!, criteria: 1 } }, 0.5)).toBeNull();
   });
 });
 
@@ -189,7 +206,7 @@ describe("jobClassAgreement", () => {
   it("exact, J1-vs-not and confident-only agreement over principal+Jev pairs", () => {
     const rec = (principal: string, choice: string, p: number): JobClassRecord => ({
       itemId: `${principal}-${choice}-${p}`, projectId: "p", contentKey: "k", rule: null, jevError: null,
-      jev: { choice: choice as never, probability: p, model: null, at: "x" },
+      jev: { choice: choice as never, probability: p, model: null, at: "x", criteria: JOB_CLASS_CRITERIA_VERSION },
       principal: { jobClass: principal as never, at: "x" },
     });
     const a = jobClassAgreement(
@@ -197,6 +214,21 @@ describe("jobClassAgreement", () => {
       0.6,
     );
     expect(a).toEqual({ compared: 4, exact: 0.5, j1: 0.75, confidentCompared: 3, confidentExact: 0.67 });
+  });
+
+  it("ignores rule-labelled subjects and labels asked under older criteria", () => {
+    const base = {
+      itemId: "a", projectId: "p", contentKey: "k", jevError: null,
+      principal: { jobClass: "J3_product" as const, at: "x" },
+    };
+    const a = jobClassAgreement(
+      [
+        { ...base, rule: "meta", jev: { choice: "J3_product", probability: 0.9, model: null, at: "x", criteria: JOB_CLASS_CRITERIA_VERSION } },
+        { ...base, rule: null, jev: { choice: "J1_signal", probability: 0.9, model: null, at: "x" } },
+      ],
+      0.6,
+    );
+    expect(a.compared).toBe(0);
   });
 });
 
