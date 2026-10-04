@@ -25,21 +25,22 @@ import type { Stage, WorkItem, WorkType } from "../work-items/work-items.js";
 export const JOB_CLASSES: readonly JobClass[] = ["J1_signal", "J2_distribution", "J3_product", "meta"];
 
 /**
- * Jev choice criteria. v2 (2026-10-04, principal's rubric): classify by what
- * the task's output is for, not by the kind of activity. J1 is the contact act
- * only; desk work splits into targeting/reach (J2) and build/think (J3); meta is
- * the principal's own operating system. J3 deliberately broadens the PRD's
- * "product" to all project desk work, so analysis never inflates J1.
+ * Jev choice criteria. Classify by what the task's output is for.
+ *   v2 (2026-10-04): J1 = contact act only; desk work → J2 (targeting/reach) or J3.
+ *   v3 (2026-10-04, principal): a *direct* prerequisite takes the job it serves —
+ *   contact (or the asset going out) must be the very next step; anything further
+ *   removed is analysis (J3), so desk work can't make a J1-starved week look healthy.
+ * J3 deliberately broadens the PRD's "product" to all other project desk work.
  */
-export const JOB_CLASS_CRITERIA_VERSION = 2;
+export const JOB_CLASS_CRITERIA_VERSION = 3;
 
 export const JOB_CLASS_CRITERIA: Record<JobClass, string> = {
   J1_signal:
-    "Signal: the customer contact act itself — sending outreach, booking or holding a call or meeting, following up, asking for a reply, LOI, deposit or payment, logging what the person said right after the contact, and harvesting prospects' own words from where they talk (social listening for verbatims). Other desk work before or after contact is not J1.",
+    "Signal — finding demand: the customer contact act (outreach, calls, meetings, follow-ups, asking for a reply, LOI, deposit or payment), logging what people said right after, harvesting prospects' own words from where they talk, AND direct prerequisites whose very next step is a contact: the named prospect list with openers, the interview or conversation script and its probes, the questions or columns that capture demand evidence, the interview log or tally fed by verbatims.",
   J2_distribution:
-    "Distribution: reaching and targeting people — choosing the segment, geography, channel or who goes on the list, positioning and messaging, pitch and one-pager wording, landing pages and their intake forms, content and fact-checking it, and setting up the outreach (lists, tracking sheets) that the contact will use.",
+    "Distribution — building reach for an offer: targeting (segment, geography, channel), positioning, pitch and one-pager wording, landing pages and intake forms, lead magnets and content, AND direct prerequisites whose very next step is that asset or offer going out: fact-checking content before publishing, pilot pricing and term sheets, the outreach tracker mechanics, consent and compliance before sending.",
   J3_product:
-    "Build and think: desk work on the project itself — building, fixing or specifying the product or service, its plumbing (code, webhooks, workflows, merges, test runs), research, analysis, and synthesising evidence into the ICP or plan.",
+    "Build and think — everything else on the project: building, fixing or specifying the product or service and its plumbing (code, webhooks, workflows, merges, test runs), research, competitive teardowns, analysis, decisions, and synthesising evidence into the ICP or plan — including prep that is more than one step away from a contact or a published asset.",
   meta:
     "Meta: the founder's own operating system rather than any one project — their control plane, agents, machines and personal tooling, and portfolio admin such as moving key questions between projects or grooming backlogs.",
 };
