@@ -84,6 +84,8 @@ import {
 import { makeSourceIndexerDeps, makeSourceIndexStore } from "./lib/source-index/worker-deps.js";
 import { runAssociation } from "./lib/note-association/associate.js";
 import { makeNoteAssociationDeps, makeNoteAssociationStore } from "./lib/note-association/worker-deps.js";
+import { instrumentContext } from "./lib/record/instrument.js";
+import { assertExpectedRev, currentWriteMeta, listEvents } from "./lib/record/write-guard.js";
 
 /**
  * Obsidian daily directory — where briefs, weekly reviews, and weekend prep
@@ -458,7 +460,10 @@ async function ensureObsidianWatcherRunning(ctx: PluginContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const plugin: PaperclipPlugin = definePlugin({
-  async setup(ctx: PluginContext): Promise<void> {
+  async setup(rawCtx: PluginContext): Promise<void> {
+    // T-db.2: every entity write is rev-checked and audited; every action and
+    // job runs with actor/surface meta (see lib/record/write-guard.ts).
+    const ctx = instrumentContext(rawCtx);
     ctx.logger.info("pacc plugin starting", { pluginId: PLUGIN_ID });
 
     // T-2.1: start the continuous vault watcher immediately at plugin
@@ -1092,6 +1097,7 @@ const plugin: PaperclipPlugin = definePlugin({
       if (!id) throw new Error("id is required");
       const prior = await deps.getItem(id);
       if (!prior) throw new Error(`no work item ${id}`);
+      assertExpectedRev("work-item", prior, currentWriteMeta().expectedRev);
       const actor = typeof params.actor === "string" && params.actor ? params.actor : "principal";
       const item = applyPatch(prior, (params.patch ?? {}) as WorkItemPatch, { now: new Date(), actor });
       await deps.putItem(item);
@@ -1212,7 +1218,17 @@ const plugin: PaperclipPlugin = definePlugin({
       const id = typeof params.id === "string" ? params.id : "";
       if (!id) throw new Error("id is required");
       const actor = typeof params.actor === "string" && params.actor ? params.actor : "principal";
-      return await updateLine(makeLineDeps(ctx), id, (params.patch ?? {}) as LinePatch, { now: new Date(), actor });
+      const lines = makeLineDeps(ctx);
+      const expectedRev = currentWriteMeta().expectedRev;
+      if (expectedRev !== null) assertExpectedRev("project-line", await lines.getLine(id), expectedRev);
+      return await updateLine(lines, id, (params.patch ?? {}) as LinePatch, { now: new Date(), actor });
+    });
+
+    // T-db.2: the record's audit trail — who changed what, from which surface.
+    ctx.data.register("record-events", async (params) => {
+      const s = (k: string) => (typeof params[k] === "string" && params[k] ? (params[k] as string) : undefined);
+      const limit = typeof params.limit === "number" ? params.limit : Number(params.limit) || 50;
+      return { events: await listEvents(ctx.entities, { entityType: s("entityType"), entityId: s("entityId"), surface: s("surface"), limit }) };
     });
 
     // One-time takeover of the portfolio seed (missing-only unless mode=overwrite).
