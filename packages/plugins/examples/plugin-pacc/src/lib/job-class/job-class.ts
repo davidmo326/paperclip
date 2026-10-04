@@ -19,6 +19,7 @@
 
 import { createHash } from "node:crypto";
 import type { JobActivity, JobClass } from "../briefer/job-mix.js";
+import type { BacklogEntry } from "../lines/backlog.js";
 import type { Stage, WorkItem, WorkType } from "../work-items/work-items.js";
 
 export const JOB_CLASSES: readonly JobClass[] = ["J1_signal", "J2_distribution", "J3_product", "meta"];
@@ -48,10 +49,18 @@ export interface JevLabel {
   at: string;
 }
 
-/** Stored per work item (entity `job-class`, externalId = itemId). */
+/**
+ * Stored per classified subject (entity `job-class`, externalId = itemId).
+ * Floor items use the work item id; backlog tasks use `bl:<lineId>:<entryId>`
+ * and never feed job-mix — they are trial data for the agreement gate.
+ */
 export interface JobClassRecord {
   itemId: string;
   projectId: string;
+  /** Absent on records written before backlog backtests (= floor). */
+  source?: "floor" | "backlog";
+  /** Backlog records carry their text (there is no work item to join to). */
+  title?: string;
   /** Hash of the classified content — a changed title/detail/workType/line re-classifies. */
   contentKey: string;
   rule: JobClass | null;
@@ -74,15 +83,15 @@ export type ClassifyFn = (state: string) => Promise<{ choice: JobClass; probabil
 // Rules + state
 // ---------------------------------------------------------------------------
 
-export function ruleJobClass(item: Pick<WorkItem, "workType" | "projectId">): JobClass | null {
+export function ruleJobClass(item: { workType?: string | null; projectId: string }): JobClass | null {
   if (META_LINE_IDS.has(item.projectId)) return "meta";
   const byType: Partial<Record<WorkType, JobClass>> = { "market-contact": "J1_signal" };
-  return byType[item.workType] ?? null;
+  return item.workType ? (byType[item.workType as WorkType] ?? null) : null;
 }
 
-export function contentKeyOf(item: Pick<WorkItem, "projectId" | "title" | "detail" | "workType">): string {
+export function contentKeyOf(item: { projectId: string; title: string; detail?: string | null; workType?: string | null }): string {
   return createHash("sha256")
-    .update(JSON.stringify([item.projectId, item.title, item.detail ?? "", item.workType]))
+    .update(JSON.stringify([item.projectId, item.title, item.detail ?? "", item.workType ?? ""]))
     .digest("hex")
     .slice(0, 16);
 }
@@ -97,6 +106,23 @@ export function buildJobClassState(item: WorkItem, line: LineContext | undefined
   out.push(`Title: ${item.title}`);
   if (item.detail) out.push(`Detail: ${item.detail.slice(0, 1200)}`);
   if (item.keyQuestion) out.push(`Key question it moves: ${item.keyQuestion}`);
+  return out.join("\n");
+}
+
+/** A backlog task as Jev sees it: the task, the hypothesis/question chain above it, and its line. */
+export function buildBacklogTaskState(
+  task: Pick<BacklogEntry, "text" | "workType">,
+  ancestors: readonly Pick<BacklogEntry, "kind" | "text">[],
+  line: LineContext | undefined,
+  projectId: string,
+): string {
+  const out = ["A planned task from a solo founder's project backlog."];
+  out.push(`Project: ${line?.name ?? projectId}`);
+  if (line?.phase) out.push(`Project phase: ${line.phase}`);
+  if (line?.intent) out.push(`Project intent: ${line.intent}`);
+  if (task.workType) out.push(`Work type (as filed): ${task.workType}`);
+  out.push(`Task: ${task.text}`);
+  for (const a of ancestors) out.push(`It serves the ${a.kind}: ${a.text}`);
   return out.join("\n");
 }
 
@@ -122,21 +148,31 @@ export interface LabelOptions {
 export interface LabelResult {
   /** Records that are new or changed — the caller persists these. */
   changed: JobClassRecord[];
-  /** Every active item's record after this pass, keyed by itemId. */
+  /** Every subject's record after this pass, keyed by itemId. */
   records: Map<string, JobClassRecord>;
   calls: number;
   errors: number;
 }
 
+/** One thing to classify — a floor item or a backlog task. */
+export interface LabelSubject {
+  id: string;
+  projectId: string;
+  source: "floor" | "backlog";
+  title: string;
+  contentKey: string;
+  rule: JobClass | null;
+  state(): string;
+}
+
 /**
- * Bring every active item's record up to date. Changed content starts a fresh
+ * Bring each subject's record up to date. Changed content starts a fresh
  * record — rule, Jev and principal labels all describe the old text. Jev is
  * asked only when no rule applies, nothing (label or error) is stored for this
- * content, and the call budget allows.
+ * content, and the call budget allows. Subjects are processed in id order.
  */
-export async function labelWorkItems(
-  items: readonly WorkItem[],
-  lines: ReadonlyMap<string, LineContext>,
+export async function labelSubjects(
+  subjects: readonly LabelSubject[],
   existing: ReadonlyMap<string, JobClassRecord>,
   opts: LabelOptions,
 ): Promise<LabelResult> {
@@ -145,28 +181,34 @@ export async function labelWorkItems(
   let calls = 0;
   let errors = 0;
 
-  for (const item of [...items].sort((a, b) => a.id.localeCompare(b.id))) {
-    if (!ACTIVE_STAGES.has(item.stage)) continue;
-    const contentKey = contentKeyOf(item);
-    const prior = existing.get(item.id);
-    const same = prior?.contentKey === contentKey;
-    let rec: JobClassRecord = same
-      ? { ...prior! }
-      : { itemId: item.id, projectId: item.projectId, contentKey, rule: null, jev: null, jevError: null, principal: null };
+  for (const sub of [...subjects].sort((a, b) => a.id.localeCompare(b.id))) {
+    const prior = existing.get(sub.id);
+    const same = prior?.contentKey === sub.contentKey;
+    const fresh: JobClassRecord = {
+      itemId: sub.id,
+      projectId: sub.projectId,
+      source: sub.source,
+      ...(sub.source === "backlog" ? { title: sub.title } : {}),
+      contentKey: sub.contentKey,
+      rule: null,
+      jev: null,
+      jevError: null,
+      principal: null,
+    };
+    let rec: JobClassRecord = same ? { ...prior! } : fresh;
     let dirty = !same;
 
-    const rule = ruleJobClass(item);
-    if (rec.rule !== rule) {
-      rec = { ...rec, rule };
+    if (rec.rule !== sub.rule) {
+      rec = { ...rec, rule: sub.rule };
       dirty = true;
     }
 
-    // Asked even when the principal has labelled the item: that pair is the agreement data.
-    const needsJev = rule === null && rec.jev === null && rec.jevError === null;
+    // Asked even when the principal has labelled the subject: that pair is the agreement data.
+    const needsJev = sub.rule === null && rec.jev === null && rec.jevError === null;
     if (needsJev && opts.classify && calls < opts.maxCalls) {
       calls += 1;
       try {
-        const r = await opts.classify(buildJobClassState(item, lines.get(item.projectId)));
+        const r = await opts.classify(sub.state());
         rec = { ...rec, jev: { ...r, at: opts.now.toISOString() } };
       } catch (err) {
         errors += 1;
@@ -175,10 +217,67 @@ export async function labelWorkItems(
       dirty = true;
     }
 
-    records.set(item.id, rec);
+    records.set(sub.id, rec);
     if (dirty) changed.push(rec);
   }
   return { changed, records, calls, errors };
+}
+
+/** Floor items being worked (in-progress / needs-you / done). */
+export async function labelWorkItems(
+  items: readonly WorkItem[],
+  lines: ReadonlyMap<string, LineContext>,
+  existing: ReadonlyMap<string, JobClassRecord>,
+  opts: LabelOptions,
+): Promise<LabelResult> {
+  const subjects: LabelSubject[] = items
+    .filter((item) => ACTIVE_STAGES.has(item.stage))
+    .map((item) => ({
+      id: item.id,
+      projectId: item.projectId,
+      source: "floor",
+      title: item.title,
+      contentKey: contentKeyOf(item),
+      rule: ruleJobClass(item),
+      state: () => buildJobClassState(item, lines.get(item.projectId)),
+    }));
+  return labelSubjects(subjects, existing, opts);
+}
+
+/** Backlog record id — namespaced so it can never collide with a work item id. */
+export const backlogRecordId = (lineId: string, entryId: string): string => `bl:${lineId}:${entryId}`;
+
+/** Live backlog tasks (not done/dropped, not yet promoted to the floor) on every line. */
+export function backlogSubjects(
+  lines: readonly { id: string; backlog?: { entries: BacklogEntry[] } | null }[],
+  lineCtx: ReadonlyMap<string, LineContext>,
+): LabelSubject[] {
+  const out: LabelSubject[] = [];
+  for (const line of lines) {
+    const entries = line.backlog?.entries ?? [];
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    for (const e of entries) {
+      if (e.kind !== "task" || e.status === "dropped" || e.promotedTo) continue;
+      const ancestors: BacklogEntry[] = [];
+      const seen = new Set<string>([e.id]);
+      let cur = e.parent ? byId.get(e.parent) : undefined;
+      while (cur && !seen.has(cur.id) && ancestors.length < 3) {
+        ancestors.push(cur);
+        seen.add(cur.id);
+        cur = cur.parent ? byId.get(cur.parent) : undefined;
+      }
+      out.push({
+        id: backlogRecordId(line.id, e.id),
+        projectId: line.id,
+        source: "backlog",
+        title: e.text,
+        contentKey: contentKeyOf({ projectId: line.id, title: e.text, detail: ancestors.map((a) => a.text).join(" | "), workType: e.workType ?? null }),
+        rule: ruleJobClass({ workType: e.workType ?? null, projectId: line.id }),
+        state: () => buildBacklogTaskState(e, ancestors, lineCtx.get(line.id), line.id),
+      });
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

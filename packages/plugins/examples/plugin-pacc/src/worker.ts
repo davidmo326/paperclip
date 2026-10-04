@@ -56,7 +56,7 @@ import {
 import type { AuthorityLevel } from "@paperclipai/shared";
 import { writeObsidianBrief } from "./lib/briefer/obsidian-writer.js";
 import { computeJobMix, type JobMixProjectInput, type JobMixPhase } from "./lib/briefer/job-mix.js";
-import { makeJobClassStore, refreshJobClasses, resolveJobClassConfig } from "./lib/job-class/job-class-deps.js";
+import { backtestBacklog, makeJobClassStore, refreshJobClasses, resolveJobClassConfig } from "./lib/job-class/job-class-deps.js";
 import { JOB_CLASSES, effectiveJobClass, isJobClass, jobClassAgreement } from "./lib/job-class/job-class.js";
 import {
   buildWeeklyReview,
@@ -1111,15 +1111,16 @@ const plugin: PaperclipPlugin = definePlugin({
       const [records, items] = await Promise.all([makeJobClassStore(ctx).list(), makeWorkItemDeps(ctx).listItems()]);
       const byId = new Map(items.map((i) => [i.id, i]));
       const rows = records
-        .filter((r) => byId.has(r.itemId))
+        .filter((r) => byId.has(r.itemId) || r.source === "backlog")
         .map((r) => {
-          const item = byId.get(r.itemId)!;
+          const item = byId.get(r.itemId);
           return {
             itemId: r.itemId,
             projectId: r.projectId,
-            title: item.title,
-            workType: item.workType,
-            stage: item.stage,
+            source: r.source ?? "floor",
+            title: item?.title ?? r.title ?? r.itemId,
+            workType: item?.workType ?? null,
+            stage: item?.stage ?? "backlog",
             rule: r.rule,
             jev: r.jev,
             jevError: r.jevError,
@@ -1134,8 +1135,14 @@ const plugin: PaperclipPlugin = definePlugin({
     // T-jev: one labelling pass now (classifies anything new). Runs in shadow
     // mode when the configured mode is off, so the trial can start before the
     // brief is switched over.
-    ctx.actions.register("refresh-job-classes", async () => {
+    ctx.actions.register("refresh-job-classes", async (params) => {
       const config = resolveJobClassConfig();
+      if (params.backlog === true) {
+        // Bounded per call so one action stays well inside the RPC timeout; the CLI loops.
+        const maxCalls = Number.isInteger(params.maxCalls) ? Math.min(Math.max(params.maxCalls as number, 1), 60) : 40;
+        const r = await backtestBacklog(ctx, ctx.logger, { maxCalls, config });
+        return { mode: config.mode, jevConfigured: config.jevConfigured, backlog: true, subjects: r.subjects, calls: r.calls, errors: r.errors, changed: r.changed.length, records: r.records.size };
+      }
       const r = await refreshJobClasses(ctx, ctx.logger, { config: { ...config, mode: config.mode === "off" ? "shadow" : config.mode } });
       return { mode: config.mode, jevConfigured: config.jevConfigured, calls: r.calls, errors: r.errors, changed: r.changed.length, records: r.records.size };
     });

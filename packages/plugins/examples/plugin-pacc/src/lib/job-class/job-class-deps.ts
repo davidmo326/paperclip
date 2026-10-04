@@ -20,7 +20,9 @@ import { makeLineDeps } from "../lines/lines-deps.js";
 import { makeWorkItemDeps } from "../work-items/work-item-deps.js";
 import {
   JOB_CLASS_CRITERIA,
+  backlogSubjects,
   isJobClass,
+  labelSubjects,
   labelWorkItems,
   workItemActivities,
   type ClassifyFn,
@@ -155,4 +157,33 @@ export async function refreshJobClasses(
     logger.warn("job-class pass failed; job-mix falls back to dominant classes", { error: (err as Error).message });
     return empty;
   }
+}
+
+/**
+ * Backlog backtest: Jev labels live backlog tasks on every line so the
+ * principal can build agreement data without waiting for floor work. Records
+ * are `source: "backlog"` and never reach job-mix. Bounded per call (the
+ * caller loops until `calls` is 0); throws on store failure — it's an
+ * explicit action, not a brief step.
+ */
+export async function backtestBacklog(
+  ctx: DecisionCtx,
+  logger: Logger,
+  opts: { maxCalls: number; now?: Date; classify?: ClassifyFn; config?: JobClassConfig },
+): Promise<LabelResult & { subjects: number }> {
+  const config = opts.config ?? resolveJobClassConfig();
+  const classify = opts.classify ?? (config.jevConfigured ? makeJevClassify() : undefined);
+  if (!classify) throw new Error("no PACC_JEV_API_KEY — a backlog backtest needs Jev");
+  const store = makeJobClassStore(ctx);
+  const [lines, stored] = await Promise.all([makeLineDeps(ctx).listLines(), store.list()]);
+  const lineCtx = new Map<string, LineContext>(lines.map((l) => [l.id, { id: l.id, name: l.name, phase: l.phase, intent: l.intent }]));
+  const subjects = backlogSubjects(lines, lineCtx);
+  const result = await labelSubjects(subjects, new Map(stored.map((r) => [r.itemId, r])), {
+    now: opts.now ?? new Date(),
+    maxCalls: opts.maxCalls,
+    classify,
+  });
+  for (const rec of result.changed) await store.put(rec);
+  logger.info("job-class backlog backtest pass", { subjects: subjects.length, calls: result.calls, errors: result.errors, changed: result.changed.length });
+  return { ...result, subjects: subjects.length };
 }

@@ -9,10 +9,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   activeAt,
+  backlogSubjects,
   buildJobClassState,
   contentKeyOf,
   effectiveJobClass,
   jobClassAgreement,
+  labelSubjects,
   labelWorkItems,
   ruleJobClass,
   workItemActivities,
@@ -212,5 +214,52 @@ describe("config", () => {
     expect(env.JEV_API_KEY).toBe("pk");
     expect(env.JEV_MODEL).toBe("explicit");
     expect(env.JEV_API_URL).toBeUndefined();
+  });
+});
+
+describe("backlogSubjects", () => {
+  const entry = (over: Record<string, unknown>) => ({
+    id: "e", kind: "task", parent: null, text: "t", status: "todo", sourceRefs: [], statusBy: "reconciler", updatedAt: "x", ...over,
+  });
+  const lines = [
+    {
+      id: "ndis",
+      backlog: {
+        entries: [
+          entry({ id: "q1", kind: "question", text: "Will plan managers pay?", status: "open" }),
+          entry({ id: "h1", kind: "hypothesis", parent: "q1", text: "They lose 5h/week to invoices", status: "untested" }),
+          entry({ id: "t1", parent: "h1", text: "Email 5 plan managers" }),
+          entry({ id: "t2", text: "Old idea", status: "dropped" }),
+          entry({ id: "t3", text: "Promoted", promotedTo: "w-9" }),
+          entry({ id: "t4", text: "Call 3 managers", workType: "market-contact" }),
+        ],
+      },
+    },
+    { id: "personal-ai-control-plane", backlog: { entries: [entry({ id: "t1", text: "Tidy the brief" })] } },
+    { id: "empty", backlog: null },
+  ];
+  const ctxLines = new Map<string, LineContext>([["ndis", { id: "ndis", name: "NDIS", phase: "validate", intent: null }]]);
+
+  it("takes live, unpromoted tasks only, with namespaced ids and rules", () => {
+    const subs = backlogSubjects(lines as never, ctxLines);
+    expect(subs.map((s) => [s.id, s.rule])).toEqual([
+      ["bl:ndis:t1", null],
+      ["bl:ndis:t4", "J1_signal"],
+      ["bl:personal-ai-control-plane:t1", "meta"],
+    ]);
+  });
+
+  it("gives Jev the hypothesis/question chain above the task", () => {
+    const s = backlogSubjects(lines as never, ctxLines)[0]!.state();
+    expect(s).toContain("Task: Email 5 plan managers");
+    expect(s).toContain("It serves the hypothesis: They lose 5h/week to invoices");
+    expect(s).toContain("It serves the question: Will plan managers pay?");
+  });
+
+  it("labels backlog subjects as source backlog with their text", async () => {
+    const classify = jev({ choice: "J1_signal", probability: 0.9, model: null });
+    const r = await labelSubjects(backlogSubjects(lines as never, ctxLines), new Map(), { now: NOW, maxCalls: 10, classify });
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(r.records.get("bl:ndis:t1")).toMatchObject({ source: "backlog", title: "Email 5 plan managers", jev: { choice: "J1_signal" } });
   });
 });
