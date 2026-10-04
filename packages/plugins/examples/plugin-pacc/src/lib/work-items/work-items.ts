@@ -28,8 +28,11 @@ const TRIAGING_ACTORS = new Set(["principal", "cos"]);
  * The runtime (cockpit) relays a live session that is waiting on the principal.
  * That is attention, not new work, so it may land straight in Needs you — and
  * nowhere else outside Intake (CONTEXT.md: Needs you, the one attention primitive).
+ * `ops-signals` relays the Project Dashboard's exposure findings on the same
+ * terms (T-dash): an estate alarm, not a task to triage.
  */
 const RUNTIME_ACTOR = "runtime";
+const ATTENTION_ACTORS = new Set([RUNTIME_ACTOR, "ops-signals"]);
 
 export interface SourceRef {
   kind: string;
@@ -145,7 +148,7 @@ export function makeWorkItem(
   const requested = input.stage ? oneOf(STAGES, input.stage, "stage") : "intake";
   const stage: Stage = TRIAGING_ACTORS.has(opts.actor)
     ? requested
-    : opts.actor === RUNTIME_ACTOR && requested === "needs-you"
+    : ATTENTION_ACTORS.has(opts.actor) && requested === "needs-you"
       ? "needs-you"
       : "intake";
   const at = opts.now.toISOString();

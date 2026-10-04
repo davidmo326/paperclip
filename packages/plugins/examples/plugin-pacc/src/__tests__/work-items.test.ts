@@ -21,6 +21,13 @@ describe("work items", () => {
     expect(makeWorkItem({ ...base, stage: "needs-you" }, { id: "a", now, actor: "cos" }).stage).toBe("needs-you");
   });
 
+  it("lets attention relays (runtime, ops-signals) land in needs-you and nowhere else", () => {
+    for (const actor of ["runtime", "ops-signals"]) {
+      expect(makeWorkItem({ ...base, stage: "needs-you" }, { id: "a", now, actor }).stage).toBe("needs-you");
+      expect(makeWorkItem({ ...base, stage: "in-progress" }, { id: "a", now, actor }).stage).toBe("intake");
+    }
+  });
+
   it("forces J (and any other actor) into intake — intake is not priority", () => {
     expect(makeWorkItem({ ...base, stage: "needs-you" }, { id: "a", now, actor: "j" }).stage).toBe("intake");
   });
