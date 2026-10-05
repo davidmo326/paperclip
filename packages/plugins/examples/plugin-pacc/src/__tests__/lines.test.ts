@@ -364,3 +364,19 @@ describe("line backlog (the reconciled pile)", () => {
     expect(() => promoteEntry(line, b, "q1", "triage", { now: NOW, newId: () => "x" })).toThrow();
   });
 });
+
+describe("steward hallucination tripwire, floor era", () => {
+  it("skips prose compounds and number-units, grounds floor words, still flags invented ids", async () => {
+    const { detectHallucinations } = await import("../lib/briefer/hallucination.js");
+    const md = "Send a follow-up in-person after the 5-minute call; move item to in-progress on personal-ai-control-plane. See bogus-ref-123 and widget-v2-plan.";
+    const flags = detectHallucinations({
+      briefMarkdown: md,
+      knownIds: new Set(["personal-ai-control-plane"]),
+      groundingPhrases: ["stage in-progress"],
+      ignoreProseCompounds: true,
+    });
+    expect(flags.map((f) => f.reference).sort()).toEqual(["bogus-ref-123", "widget-v2-plan"]);
+    const strict = detectHallucinations({ briefMarkdown: "a follow-up", knownIds: new Set() });
+    expect(strict.map((f) => f.reference)).toEqual(["follow-up"]);
+  });
+});

@@ -197,13 +197,14 @@ export async function runScheduledSteward(
     let selfPaused = false;
     if (deps.hallucination) {
       const modelGenerated = journal.modelGenerated;
-      const sourcePaths = journal.attention.flatMap((a) => a.sourceRefs);
-      const groundingPhrases = journal.attention.map((a) => a.project);
+      const sourcePaths = [...journal.attention.flatMap((a) => a.sourceRefs), ...journal.drafts.map((d) => d.path)];
+      const groundingPhrases = [...journal.attention.map((a) => a.project), ...(deps.hallucination.groundingText ?? [])];
       const flags = detectHallucinations({
         briefMarkdown: markdown,
         knownIds: deps.hallucination.knownIds,
         sourcePaths,
         groundingPhrases,
+        ignoreProseCompounds: true,
       });
       hallucinationFlagCount = flags.length;
       if (flags.length > 0) {

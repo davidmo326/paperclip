@@ -70,6 +70,11 @@ export const SCHEMA_VIOLATION_EVENT = "briefer.schema_violation";
 export interface HallucinationDeps {
   /** Canonical IDs the briefer was given — used to validate references. */
   knownIds: ReadonlySet<string>;
+  /**
+   * Text the model was handed (the floor: lines, backlog, items). A token
+   * that occurs in it is grounded by construction, not invented.
+   */
+  groundingText?: string[];
   /** Read/write the rolling 24h flag counter (plugin_state). */
   readFlags(): Promise<HallucinationCounterState | null>;
   writeFlags(state: HallucinationCounterState): Promise<void>;

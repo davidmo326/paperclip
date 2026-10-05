@@ -92,6 +92,12 @@ export interface HallucinationFlag {
 export interface DetectHallucinationsInput {
   briefMarkdown: string;
   /**
+   * Skip two-part alphabetic compounds ("follow-up", "in-person",
+   * "problem-side"): in floor-era prose these are English, not IDs. The
+   * steward sets it; real two-part project slugs are grounded via knownIds.
+   */
+  ignoreProseCompounds?: boolean;
+  /**
    * Canonical IDs the briefer knew about. Compared case-insensitively.
    * Include project slugs/UUIDs, decision UUIDs, task UUIDs, etc.
    */
@@ -169,6 +175,7 @@ export function detectHallucinations(
   for (const ref of tokens) {
     const lc = ref.toLowerCase();
     if (knownLc.has(lc) || allowLc.has(lc)) continue;
+    if (input.ignoreProseCompounds && (/^[a-z]+-[a-z]+$/.test(lc) || /^\d+-[a-z]+$/.test(lc))) continue;
     if (sourcePathsLc.some((p) => p.includes(lc))) continue;
     if (groundingPhrasesLc.some((p) => p.includes(lc))) continue;
     flags.push({

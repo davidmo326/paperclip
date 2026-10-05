@@ -24,6 +24,7 @@ import {
   STEWARD_PAUSED_STATE_KEY,
   TELEMETRY_STATE_KEY,
   STEWARD_JOURNAL_STORE_STATE_KEY,
+  HALLUCINATION_FLAGS_STATE_KEY,
 } from "./constants.js";
 import { runStaleRehash } from "./jobs/stale-rehash.js";
 import { runSourceDecayCheck } from "./jobs/source-decay-check.js";
@@ -980,6 +981,13 @@ const plugin: PaperclipPlugin = definePlugin({
           null,
         );
       }
+      // The principal's resume means "reviewed — not hallucinations": drop the
+      // model sightings in the window so stale flags can't re-pause the next run.
+      const flagsKey = { scopeKind: "instance" as const, namespace: PLUGIN_NAMESPACE, stateKey: HALLUCINATION_FLAGS_STATE_KEY };
+      const flagState = (await ctx.state.get(flagsKey)) as { sightings?: Array<{ modelGenerated?: boolean }> } | null;
+      if (flagState?.sightings) {
+        await ctx.state.set(flagsKey, { ...flagState, sightings: flagState.sightings.filter((x) => !x.modelGenerated) });
+      }
       await ctx.events.emit(
         "agent.resumed",
         (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? "instance",
@@ -995,6 +1003,13 @@ const plugin: PaperclipPlugin = definePlugin({
 
     // T-3.12 (D-39): the current 24h hallucination-flag window, one row per
     // unique normalized reference (not per flagged run).
+    ctx.data.register("steward-paused", async () => {
+      const v = (await ctx.state.get({ scopeKind: "instance", namespace: PLUGIN_NAMESPACE, stateKey: STEWARD_PAUSED_STATE_KEY })) as
+        | { paused?: boolean; reason?: string | null; pausedAt?: string | null }
+        | null;
+      return { paused: v?.paused === true, reason: v?.reason ?? null, pausedAt: v?.pausedAt ?? null };
+    });
+
     ctx.data.register("hallucination-audit", async () => {
       return await readHallucinationAuditWindow(ctx, new Date());
     });

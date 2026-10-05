@@ -328,6 +328,29 @@ export async function makeScheduledStewardDeps(
     knownIds.add(c.projectId);
     knownIds.add(c.projectName);
   }
+  // The floor is part of what the CoS is handed: its line ids, item ids and
+  // the words in lines, backlog entries and items are grounded, not invented.
+  const groundingText: string[] = [];
+  try {
+    const [lines, items] = await Promise.all([makeLineDeps(ctx).listLines(), makeWorkItemDeps(ctx).listItems()]);
+    for (const l of lines) {
+      knownIds.add(l.id);
+      knownIds.add(l.name);
+      if (l.legacyProjectId) knownIds.add(l.legacyProjectId);
+      groundingText.push(
+        [l.intent, l.keyQuestion, l.currentStatus, l.nextSmallestAction, l.blockerSummary, l.doNotRethink, l.killCriteria, l.phase, ...l.keyQuestionCandidates]
+          .filter(Boolean)
+          .join(" \n "),
+      );
+      for (const e of l.backlog?.entries ?? []) groundingText.push([e.text, e.test, e.evidence].filter(Boolean).join(" \n "));
+    }
+    for (const it of items) {
+      knownIds.add(it.id);
+      groundingText.push([it.title, it.detail, it.stage, it.workType, it.size].filter(Boolean).join(" \n "));
+    }
+  } catch {
+    // floor unreadable: fall back to the cards alone
+  }
 
   // T-2.4: fresh registry read per run (morning-sweep reload semantics).
   const m1b = await makeObsidianGuard(ctx, eventCompanyId);
@@ -341,7 +364,7 @@ export async function makeScheduledStewardDeps(
       await ctx.events.emit(name, eventCompanyId, payload);
     },
     logger: ctx.logger,
-    hallucination: makeStewardHallucinationDeps(ctx, knownIds),
+    hallucination: { ...makeStewardHallucinationDeps(ctx, knownIds), groundingText },
   };
 
   return { deps, eventCompanyId, model, guard: m1b.guard, registryWarnings: m1b.registryWarnings };
