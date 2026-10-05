@@ -36,18 +36,31 @@ export async function callModelViaMessagesApi(args: CallModelArgs, opts: Message
       },
       body: JSON.stringify({
         model: args.modelId,
-        max_tokens: opts.maxTokens ?? 8000,
+        // reasoning models (GLM 5.x) spend part of the budget thinking before any text;
+        // 8k ran out before the journal JSON began ("empty response", 2026-10-05/06)
+        max_tokens: opts.maxTokens ?? (Number(process.env.PACC_STEWARD_MAX_TOKENS) || 32000),
         ...(args.systemPrompt ? { system: args.systemPrompt } : {}),
         messages: [{ role: "user", content: args.prompt }],
       }),
       signal: AbortSignal.timeout(opts.timeoutMs ?? 600_000),
     });
     const body = (await res.json().catch(() => null)) as
-      | { id?: string; content?: Array<{ type?: string; text?: string }>; error?: { message?: string } }
+      | {
+          id?: string;
+          content?: Array<{ type?: string; text?: string }>;
+          stop_reason?: string;
+          usage?: { input_tokens?: number; output_tokens?: number };
+          error?: { message?: string };
+        }
       | null;
     if (!res.ok) return degrade(`HTTP ${res.status}: ${body?.error?.message ?? "no error body"}`);
     const text = (body?.content ?? []).filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text).join("");
-    if (!text.trim()) return degrade("empty response");
+    if (!text.trim()) {
+      const blocks = (body?.content ?? []).map((c) => c.type ?? "?").join(",") || "none";
+      return degrade(
+        `empty response (stop_reason=${body?.stop_reason ?? "?"}; blocks=${blocks}; output_tokens=${body?.usage?.output_tokens ?? "?"})`,
+      );
+    }
     return { text, sessionId: body?.id ?? null };
   } catch (err) {
     return degrade(err instanceof Error ? err.message : String(err));
