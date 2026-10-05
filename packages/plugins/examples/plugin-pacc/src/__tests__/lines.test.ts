@@ -14,12 +14,13 @@ import { parseResultBlock, renderDispatchCard, RESULT_FENCE } from "../lib/lines
 import {
   importLines,
   promoteJournalToFloor,
+  recordItemEvidence,
   recordRunResult,
   updateLine,
 } from "../lib/lines/floor-actions.js";
 import type { LineDeps } from "../lib/lines/lines-deps.js";
 import type { WorkItemDeps } from "../lib/work-items/work-item-deps.js";
-import { makeWorkItem, type WorkItem } from "../lib/work-items/work-items.js";
+import { applyPatch, makeWorkItem, type WorkItem } from "../lib/work-items/work-items.js";
 
 const NOW = new Date("2026-09-30T00:00:00.000Z");
 
@@ -178,6 +179,26 @@ describe("context carry", () => {
     expect(r.item.draft?.status).toBe("pending");
     expect(r.followUps.map((f) => [f.title, f.stage])).toEqual([["Ask owner #2", "intake"]]);
     expect((await lines.getLine("hometrics"))?.lastEvidenceAt).toBe(later.toISOString());
+  });
+
+  it("a result logged by hand moves the evidence clock once, and only for a success (T-flow)", async () => {
+    const lines = memLines([lineFromSeed({ ...SEED, lastEvidenceAt: "2026-08-19T00:00:00.000Z" }, { now: NOW, actor: "principal" })]);
+    const prior = makeWorkItem(
+      { projectId: "hometrics", title: "DM a friend mid-search", workType: "market-contact", size: "bite", stage: "in-progress" },
+      { id: "i1", now: NOW, actor: "principal" },
+    );
+    const done = applyPatch(prior, { stage: "done", result: { ok: true, summary: "Sent 2", evidence: true } }, { now: NOW, actor: "principal" });
+    expect(await recordItemEvidence(lines, prior, done, NOW)).toBe(true);
+    expect((await lines.getLine("hometrics"))?.lastEvidenceAt).toBe(NOW.toISOString());
+
+    const later = new Date("2026-10-01T00:00:00.000Z");
+    const edited = applyPatch(done, { result: { ok: true, summary: "Sent 2; one replied", evidence: true } }, { now: later, actor: "principal" });
+    expect(await recordItemEvidence(lines, done, edited, later)).toBe(false);
+    const drafted = applyPatch(prior, { result: { ok: true, summary: "Drafted only", evidence: false } }, { now: later, actor: "principal" });
+    expect(await recordItemEvidence(lines, prior, drafted, later)).toBe(false);
+    const failed = applyPatch(prior, { result: { ok: false, summary: "Bounced", evidence: true } }, { now: later, actor: "principal" });
+    expect(await recordItemEvidence(lines, prior, failed, later)).toBe(false);
+    expect((await lines.getLine("hometrics"))?.lastEvidenceAt).toBe(NOW.toISOString());
   });
 
   it("a failed run never counts as evidence", async () => {

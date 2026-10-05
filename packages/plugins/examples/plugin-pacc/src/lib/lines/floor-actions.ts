@@ -63,6 +63,20 @@ export async function updateLine(
   return out;
 }
 
+/**
+ * A result logged by the principal (the cockpit Flow close-out, not a hand's
+ * run) moves the line's evidence clock the way a hand's result does — only on
+ * the write that first marks it as evidence, so a replay or later edit never
+ * moves it again, and a failed result never counts.
+ */
+export async function recordItemEvidence(deps: LineDeps, prior: WorkItem, item: WorkItem, now: Date): Promise<boolean> {
+  if (item.result?.evidence !== true || item.result.ok === false || prior.result?.evidence === true) return false;
+  const line = await deps.getLine(item.projectId);
+  if (!line) return false;
+  await deps.putLine(recordEvidence(line, now));
+  return true;
+}
+
 export async function dispatchCardFor(deps: FloorDeps, itemId: string): Promise<{ card: string; item: WorkItem; line: ProjectLine | null }> {
   const item = await deps.items.getItem(itemId);
   if (!item) throw new Error(`no work item ${itemId}`);

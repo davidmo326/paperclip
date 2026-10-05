@@ -141,7 +141,7 @@ import { makeLineDeps } from "./lib/lines/lines-deps.js";
 import type { LinePatch } from "./lib/lines/lines.js";
 import { renderSnapshot } from "./lib/lines/lines.js";
 import { promoteEntry, reconcileBacklog, summarizeBacklog, updateBacklogEntry } from "./lib/lines/backlog.js";
-import { dispatchCardFor, importLines, recordRunResult, updateLine } from "./lib/lines/floor-actions.js";
+import { dispatchCardFor, importLines, recordItemEvidence, recordRunResult, updateLine } from "./lib/lines/floor-actions.js";
 export { STALE_THRESHOLDS_MS };
 
 // ---------------------------------------------------------------------------
@@ -1099,8 +1099,11 @@ const plugin: PaperclipPlugin = definePlugin({
       if (!prior) throw new Error(`no work item ${id}`);
       assertExpectedRev("work-item", prior, currentWriteMeta().expectedRev);
       const actor = typeof params.actor === "string" && params.actor ? params.actor : "principal";
-      const item = applyPatch(prior, (params.patch ?? {}) as WorkItemPatch, { now: new Date(), actor });
+      const now = new Date();
+      const item = applyPatch(prior, (params.patch ?? {}) as WorkItemPatch, { now, actor });
       await deps.putItem(item);
+      // T-flow: a contact logged by hand moves the evidence clock, as a hand's result does
+      await recordItemEvidence(makeLineDeps(ctx), prior, item, now);
       return { item };
     });
 
