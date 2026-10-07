@@ -65,10 +65,16 @@ export async function getPostgresDataDirectory(url: string): Promise<string | nu
   }
 }
 
+// Manual rollback scripts are never forward migrations (review 2026-10-07 F2:
+// a `*_down.sql` left in this folder was auto-applied in production).
+export function isForwardMigrationFile(name: string): boolean {
+  return name.endsWith(".sql") && !/_down\.sql$/i.test(name);
+}
+
 async function listMigrationFiles(): Promise<string[]> {
   const entries = await readdir(MIGRATIONS_FOLDER, { withFileTypes: true });
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
+    .filter((entry) => entry.isFile() && isForwardMigrationFile(entry.name))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 }

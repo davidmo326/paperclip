@@ -2,12 +2,14 @@
 -- DOWN migration for 0047_pacc_decisions_authority.sql
 -- ============================================================================
 --
--- This file is NOT applied by paperclip's forward-only migration runner.
+-- Lives OUTSIDE src/migrations on purpose: the runner applies every *.sql in
+-- that folder, and on 2026-05-20 it auto-applied this file in production,
+-- dropping both tables (review 2026-10-07 F2; history row id 49 is its hash).
 -- It is a documented manual rollback for nuclear cases where you need to
 -- drop the T-1.4 tables and start over.
 --
 -- Usage (against a dev DB only — destructive):
---   psql "$PACC_DEV_DB_URL" -f packages/db/src/migrations/0047_pacc_decisions_authority_down.sql
+--   psql "$PACC_DEV_DB_URL" -f packages/db/manual-rollbacks/0047_pacc_decisions_authority_down.sql
 --
 -- Or — for the filesystem-snapshot rollback path (Option A from T-0.6):
 --   pkill -f dev-watch && bash ControlPlane/scripts/restore-dev-db.sh <pre-T-1.4-snapshot>
