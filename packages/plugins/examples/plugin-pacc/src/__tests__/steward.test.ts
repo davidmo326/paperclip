@@ -435,6 +435,27 @@ describe("steward authority ceiling (T-4.8)", () => {
     expect(Object.keys(deps).sort()).toEqual([...STEWARD_DEPS_ALLOWED_KEYS].sort());
   });
 
+  it("a paused briefer's old brief + feedback stop reaching the CoS after 3 days", async () => {
+    const ctxFor = (briefDate: string): StewardWorkerCtx => ({
+      companies: { list: async () => [{ id: "c-1" }] },
+      projects: { list: async () => [] },
+      state: {
+        get: async (k: { stateKey: string }) =>
+          k.stateKey === "brief-delta.v1" ? { briefDate } : k.stateKey === "brief-feedback.v1" ? [{ wrong: "stale advice" }] : null,
+        set: async () => undefined,
+      },
+      events: { emit: async () => undefined },
+      logger: { info: () => undefined, warn: () => undefined },
+      entities: { upsert: async () => ({}) as never, list: async () => [] as never[] },
+    }) as StewardWorkerCtx;
+    const today = new Date().toISOString().slice(0, 10);
+    const fresh = makeStewardDeps(ctxFor(today), [], async () => ({ text: null, sessionId: null }));
+    expect(await fresh.readBriefFeedback()).toBe("stale advice");
+    const old = makeStewardDeps(ctxFor("2026-09-11"), [], async () => ({ text: null, sessionId: null }));
+    expect(await old.readBriefFeedback()).toBeNull();
+    expect(await old.readLastBrief()).toBeNull();
+  });
+
   it("writeDraft refuses non-draft.md paths, traversal, and unwired mediators", async () => {
     const ctx: StewardWorkerCtx = {
       companies: { list: async () => [{ id: "c-1" }] },

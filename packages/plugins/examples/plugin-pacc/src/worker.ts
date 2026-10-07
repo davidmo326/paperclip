@@ -1,3 +1,4 @@
+import { h1Summary, cosProposalRows } from "./lib/steward/dispositions.js";
 import {
   definePlugin,
   runWorker,
@@ -1126,6 +1127,16 @@ const plugin: PaperclipPlugin = definePlugin({
       const items = await makeWorkItemDeps(ctx).listItems();
       const projectId = typeof params.projectId === "string" ? params.projectId : "";
       return projectId ? items.filter((i) => i.projectId === projectId) : items;
+    });
+
+    // T-cos.1: the H1 measure (ADR 0004) + raw CoS proposal dispositions. Read-only.
+    ctx.data.register("cos-h1", async (params) => {
+      const deps = makeWorkItemDeps(ctx);
+      const [items, days] = await Promise.all([deps.listItems(), deps.listCapacityDays()]);
+      const now = new Date();
+      const windowDays = typeof params.windowDays === "number" && params.windowDays > 0 ? Math.min(params.windowDays, 90) : 10;
+      const summary = h1Summary(items, days, now, windowDays);
+      return { summary, rows: cosProposalRows(items, { since: `${summary.since}T00:00:00.000Z` }) };
     });
 
     // T-jev: job classes of worked floor items — the review surface for the

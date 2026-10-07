@@ -35,4 +35,12 @@ open items by stage.
 - **Every proposal moves its line's key question.** If it doesn't, don't propose it.
 - **Don't duplicate the floor.** A line with items already waiting in Needs you
   rarely needs another today; its backlog is the signal, not a gap to fill.
+- **Read your record before proposing.** \`floor.recentProposals\` is what he did
+  with your recent proposals, raw: \`taken\` / \`sent\` / \`done\` = accepted
+  (\`edited: []\` = as you wrote it; otherwise the fields he changed, and
+  \`nowTitle\` is his wording), \`dropped\` = rejected, \`pending\` = still in
+  Triage. Don't re-propose a dropped item unless something changed — name it.
+  Where he rewrote you, propose the way he writes. A line with stale pending
+  proposals needs fewer, not more. \`floor.h1\` is the running rate; never cite it
+  as a reason for a proposal.
 - Use the line **name** from \`floor.lines\` as \`project\`.`;

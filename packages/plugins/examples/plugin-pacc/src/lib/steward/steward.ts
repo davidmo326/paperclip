@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import type { AuthorityLevel } from "@paperclipai/shared";
 import type { BrieferProjectInput, ValueAnchorSummary } from "../briefer/types.js";
 import { validateValueAnchorCitation } from "../value-anchor/loader.js";
+import type { H1Summary, ProposalRow } from "./dispositions.js";
 import { STEWARD_FLOOR_ADDENDUM, STEWARD_STANDING_PROMPT } from "./standing-prompt.js";
 import { isPromptDeniedPath, scrubForPrompt } from "../prompt-scrub.js";
 
@@ -89,6 +90,13 @@ export interface StewardFloorInput {
     needsYouTitles: string[];
     doneLast7Days: number;
   }>;
+  /**
+   * What the principal did with the CoS's recent proposals — raw rows, newest
+   * first (T-cos.1). Absent on older wiring.
+   */
+  recentProposals?: ProposalRow[];
+  /** The H1 measure over its window (ADR 0004). */
+  h1?: H1Summary;
 }
 
 export interface StewardDeps {

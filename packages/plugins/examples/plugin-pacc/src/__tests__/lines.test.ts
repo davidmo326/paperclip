@@ -285,6 +285,23 @@ describe("CoS allocation (L6)", () => {
     expect(floor.lines[0]?.open.triage).toBe(2);
     expect(floor.capacity.recorded).toBe(false);
   });
+
+  it("freezes each proposal and hands the CoS its record (T-cos.1)", async () => {
+    const { promoteJournalToFloor, readStewardFloor } = await import("../lib/lines/floor-actions.js");
+    const lines = memLines([lineFromSeed(SEED, { now: NOW, actor: "principal" })]);
+    const items = memItems();
+    const journal = { journalDate: "2026-09-30", attention: [proposal("Hometrics", "Call two owners", "bite"), proposal("Hometrics", "Tidy the README", "bite")], drafts: [] };
+    const { created } = await promoteJournalToFloor({ lines, items }, journal, NOW);
+    expect(created[0]?.proposed).toMatchObject({ title: "Call two owners", journalDate: "2026-09-30", projectId: "hometrics" });
+    const later = new Date(NOW.getTime() + 3_600_000);
+    await items.putItem(applyPatch(created[1]!, { stage: "done", note: "dropped at triage" }, { now: later, actor: "principal" }));
+    const floor = await readStewardFloor({ lines, items }, later);
+    expect(floor.recentProposals?.map((r) => [r.proposed, r.disposition])).toEqual([
+      ["Call two owners", "pending"],
+      ["Tidy the README", "dropped"],
+    ]);
+    expect(floor.h1).toMatchObject({ proposed: 2, decided: 1, dropped: 1, rate: 0 });
+  });
 });
 
 describe("CoS on the principal's Claude subscription", () => {

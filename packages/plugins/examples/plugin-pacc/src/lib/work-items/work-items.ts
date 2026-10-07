@@ -80,6 +80,21 @@ export interface RunResult {
   at: string;
 }
 
+/**
+ * What the CoS proposed, frozen at creation (ADR 0004: H1 counts proposals the
+ * principal accepts *without rewriting*). Compared with the live item to tell
+ * an accepted proposal from an edited one. Absent on non-CoS items.
+ */
+export interface ProposalSnapshot {
+  projectId: string;
+  title: string;
+  detail: string | null;
+  size: Size;
+  workType: WorkType;
+  /** Steward journal the proposal came from (YYYY-MM-DD). */
+  journalDate: string | null;
+}
+
 export interface StageMove {
   at: string;
   from: Stage | null;
@@ -113,6 +128,8 @@ export interface WorkItem {
   createdAt: string;
   updatedAt: string;
   history: StageMove[];
+  /** The CoS's original proposal (absent on items the CoS did not propose). */
+  proposed?: ProposalSnapshot | null;
 }
 
 export class WorkItemValidationError extends Error {}
@@ -136,6 +153,8 @@ export interface NewWorkItemInput {
   keyQuestion?: string | null;
   worker?: string | null;
   sourceRefs?: SourceRef[];
+  /** Journal date of the CoS proposal this item carries (CoS only). */
+  proposedFrom?: string | null;
 }
 
 export function makeWorkItem(
@@ -152,13 +171,16 @@ export function makeWorkItem(
       ? "needs-you"
       : "intake";
   const at = opts.now.toISOString();
+  const detail = optStr(input.detail);
+  const workType = oneOf(WORK_TYPES, input.workType, "workType");
+  const size = oneOf(SIZES, input.size, "size");
   return {
     id: opts.id,
     projectId,
     title,
-    detail: optStr(input.detail),
-    workType: oneOf(WORK_TYPES, input.workType, "workType"),
-    size: oneOf(SIZES, input.size, "size"),
+    detail,
+    workType,
+    size,
     stage,
     keyQuestion: optStr(input.keyQuestion),
     worker: optStr(input.worker),
@@ -172,6 +194,9 @@ export function makeWorkItem(
     createdAt: at,
     updatedAt: at,
     history: [{ at, from: null, to: stage, by: opts.actor }],
+    ...(opts.actor === "cos"
+      ? { proposed: { projectId, title, detail, size, workType, journalDate: optStr(input.proposedFrom) } }
+      : {}),
   };
 }
 

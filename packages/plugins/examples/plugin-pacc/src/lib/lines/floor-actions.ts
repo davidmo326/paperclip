@@ -17,6 +17,11 @@ import {
 } from "../work-items/work-items.js";
 import type { StewardFloorInput, StewardJournal } from "../steward/steward.js";
 import { defaultAllocation } from "../work-items/work-items.js";
+import { cosProposalRows, h1Summary } from "../steward/dispositions.js";
+
+/** How far back, and how many, raw proposal rows the CoS is handed. */
+const PROPOSAL_LOOKBACK_DAYS = 14;
+const PROPOSAL_ROWS_MAX = 15;
 
 export interface FloorDeps {
   lines: LineDeps;
@@ -239,6 +244,7 @@ export async function promoteJournalToFloor(
         stage: "triage",
         keyQuestion: line.keyQuestion,
         worker: "cos",
+        proposedFrom: journal.journalDate,
         sourceRefs: [
           { kind: "steward-journal", path: journal.journalDate },
           ...p.sourceRefs.slice(0, 5).map((r) => ({ kind: "source", path: r })),
@@ -264,6 +270,7 @@ export async function readStewardFloor(deps: FloorDeps, now: Date): Promise<Stew
   const day = days.find((d) => d.date === today) ?? null;
   const alloc = defaultAllocation(day?.score ?? null);
   const weekAgo = now.getTime() - 7 * 86_400_000;
+  const lookback = new Date(now.getTime() - PROPOSAL_LOOKBACK_DAYS * 86_400_000).toISOString();
   return {
     capacity: {
       date: today,
@@ -287,5 +294,7 @@ export async function readStewardFloor(deps: FloorDeps, now: Date): Promise<Stew
           doneLast7Days: mine.filter((i) => i.stage === "done" && Date.parse(i.updatedAt) >= weekAgo).length,
         };
       }),
+    recentProposals: cosProposalRows(items, { since: lookback }).slice(0, PROPOSAL_ROWS_MAX),
+    h1: h1Summary(items, days, now),
   };
 }

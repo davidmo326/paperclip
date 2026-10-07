@@ -346,7 +346,7 @@ export async function makeScheduledStewardDeps(
     }
     for (const it of items) {
       knownIds.add(it.id);
-      groundingText.push([it.title, it.detail, it.stage, it.workType, it.size].filter(Boolean).join(" \n "));
+      groundingText.push([it.title, it.detail, it.stage, it.workType, it.size, it.proposed?.title].filter(Boolean).join(" \n "));
     }
   } catch {
     // floor unreadable: fall back to the cards alone
@@ -392,9 +392,18 @@ function makeStewardOverlapStore(ctx: StewardWorkerCtx) {
   };
 }
 
-async function readLastBriefDate(ctx: StewardWorkerCtx): Promise<string | null> {
+/**
+ * The briefer is paused in the floor era (ADR 0002): an old brief and its
+ * feedback would reach every CoS run as if current. Past this age they are
+ * history, not rehydration.
+ */
+const BRIEF_MAX_AGE_DAYS = 3;
+
+async function readLastBriefDate(ctx: StewardWorkerCtx, now: Date = new Date()): Promise<string | null> {
   const delta = (await ctx.state.get(instanceKey(BRIEF_DELTA_STATE_KEY))) as
     | { briefDate?: string }
     | null;
-  return typeof delta?.briefDate === "string" ? delta.briefDate : null;
+  if (typeof delta?.briefDate !== "string") return null;
+  const cutoff = new Date(now.getTime() - BRIEF_MAX_AGE_DAYS * 86_400_000).toISOString().slice(0, 10);
+  return delta.briefDate >= cutoff ? delta.briefDate : null;
 }
