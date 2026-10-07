@@ -28,6 +28,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
+import { parseExtraListenHosts, startExtraListeners } from "./extra-listeners.js";
 import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
@@ -715,6 +716,14 @@ export async function startServer(): Promise<StartedServer> {
       resolveListen();
     });
   });
+
+  // Review follow-up 2026-10-07: extra bind addresses (e.g. the tailnet IP)
+  // alongside HOST, so prod can stay off 0.0.0.0 while loopback consumers
+  // (cockpit, pacc CLI) keep using localhost:3100.
+  const extraListenHosts = parseExtraListenHosts(process.env.PAPERCLIP_EXTRA_LISTEN_HOSTS, config.host);
+  if (extraListenHosts.length > 0) {
+    startExtraListeners(server, extraListenHosts, listenPort, logger);
+  }
   
   if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
