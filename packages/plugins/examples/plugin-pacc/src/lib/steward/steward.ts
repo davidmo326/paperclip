@@ -19,6 +19,7 @@ import type { AuthorityLevel } from "@paperclipai/shared";
 import type { BrieferProjectInput, ValueAnchorSummary } from "../briefer/types.js";
 import { validateValueAnchorCitation } from "../value-anchor/loader.js";
 import { STEWARD_FLOOR_ADDENDUM, STEWARD_STANDING_PROMPT } from "./standing-prompt.js";
+import { isPromptDeniedPath, scrubForPrompt } from "../prompt-scrub.js";
 
 /** Default model for the steward (judgment-heavy role → Opus default). */
 export const STEWARD_DEFAULT_MODEL = "claude-opus-4-8";
@@ -378,6 +379,41 @@ export function enforceAnchorCitations(
   return { kept, warnings };
 }
 
+/**
+ * Data policy (2026-10-07): the copy of the pack that goes to the model.
+ * Only free text that comes from journal / vault notes is scrubbed: note
+ * summaries, the daily note's Occupied line, the last brief and the
+ * principal's brief feedback. Structured fields (ids, card keys, paths,
+ * names, counts, line/item text) are left exactly as they are, and the ids
+ * and paths are also exempt inside the scrubbed text, so the hallucination
+ * tripwire still grounds what the model echoes back. The original pack still
+ * drives the deterministic journal and the cache key.
+ */
+export function scrubStewardPackForPrompt(pack: StewardRehydrationPack): StewardRehydrationPack {
+  const keep: string[] = [];
+  for (const p of pack.projects) {
+    keep.push(p.projectId, p.cardKey);
+    for (const n of p.sourceNotes) keep.push(n.path);
+  }
+  for (const l of pack.floor?.lines ?? []) keep.push(l.id);
+  for (const k of Object.values(pack.yesterdaysJournal?.projectCardKeys ?? {})) keep.push(k);
+  const scrub = (t: string | null): string | null => (t === null ? null : scrubForPrompt(t, { keep }));
+  return {
+    ...pack,
+    projects: pack.projects.map((p) => ({
+      ...p,
+      sourceNotes: p.sourceNotes
+        .filter((n) => !isPromptDeniedPath(n.path))
+        .map((n) => ({ path: n.path, summary: scrub(n.summary) })),
+    })),
+    lastBrief: pack.lastBrief ? { ...pack.lastBrief, markdown: scrub(pack.lastBrief.markdown) ?? "" } : null,
+    briefFeedback: scrub(pack.briefFeedback),
+    ...(pack.floor
+      ? { floor: { ...pack.floor, capacity: { ...pack.floor.capacity, occupiedBy: scrub(pack.floor.capacity.occupiedBy) } } }
+      : {}),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Deterministic fallback
 // ---------------------------------------------------------------------------
@@ -492,7 +528,9 @@ export async function runSteward(
       blockers: p.card.blockers.answer,
       cardKey: p.card.cacheKey,
       // T-6.7: cap the substance so a 3-project pack stays prompt-sized.
+      // Data policy: Secrets/, *.env and *.key never enter the pack.
       sourceNotes: p.card.associatedNotes
+        .filter((n) => !isPromptDeniedPath(n.path))
         .slice(0, STEWARD_PACK_SOURCE_NOTES_PER_PROJECT)
         .map((n) => ({ path: n.path, summary: n.summary })),
     })),
@@ -526,7 +564,7 @@ export async function runSteward(
       "## Rehydration pack (today)",
       "",
       "```json",
-      JSON.stringify(pack, null, 2),
+      JSON.stringify(scrubStewardPackForPrompt(pack), null, 2),
       "```",
       "",
       "Produce the journal JSON now.",

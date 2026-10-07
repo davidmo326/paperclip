@@ -11,6 +11,7 @@
 
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { isPromptDeniedPath } from "./prompt-scrub.js";
 
 /**
  * Recursively lists every `.md` file under `root` (absolute paths),
@@ -32,6 +33,10 @@ async function walk(dir: string, out: string[]): Promise<void> {
   }
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
+    // Data policy (2026-10-07): never index Secrets/ (or *.env / *.key), so
+    // nothing there can reach a summary, a card or a model prompt.
+    if (entry.isDirectory() && entry.name.toLowerCase() === "secrets") continue;
+    if (entry.isFile() && isPromptDeniedPath(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       await walk(full, out);

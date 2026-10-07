@@ -82,6 +82,7 @@ import type { SourceIndexRecord } from "../source-index/index-core.js";
 import { makeSourceIndexStore } from "../source-index/worker-deps.js";
 import { makeNoteAssociationStore, defaultPortfolioSeedPath } from "../note-association/worker-deps.js";
 import { createNoteAssociationFsDeps } from "../note-association/fs-deps.js";
+import { isPromptDeniedPath } from "../prompt-scrub.js";
 
 // ---------------------------------------------------------------------------
 // Minimal ctx surface
@@ -370,6 +371,8 @@ async function buildAssociatedNotesBySlug(
   const pathsBySlug = new Map<string, string[]>();
   for (const [notePath, entry] of Object.entries(catalog)) {
     if (!entry || !entry.projectId) continue; // unassociated bucket
+    // Data policy: Secrets/, *.env and *.key never ground a card (or a prompt).
+    if (isPromptDeniedPath(notePath)) continue;
     const list = pathsBySlug.get(entry.projectId);
     if (list) list.push(notePath);
     else pathsBySlug.set(entry.projectId, [notePath]);
