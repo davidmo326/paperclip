@@ -48,6 +48,7 @@ import type { PluginJobScheduler } from "./plugin-job-scheduler.js";
 import type { PluginJobStore } from "./plugin-job-store.js";
 import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import type { PluginLifecycleManager } from "./plugin-lifecycle.js";
+import { pluginHostEnv } from "./plugin-host-env.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1732,22 +1733,9 @@ export function pluginLoader(
         apiVersion: manifest.apiVersion,
         hostHandlers,
         autoRestart: true,
-        // PACC_* control-plane env (model selection, heartbeat URL…) plus the
-        // Anthropic-compatible model-endpoint vars (GLM Coding Plan via
-        // api.z.ai) are host configuration the plugins read from process.env
-        // — pass them through the spawn boundary. spawnProcess otherwise
-        // gives workers a minimal env by design; these are the control
-        // plane's own namespaces, so nothing else leaks.
-        env: Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key, value]): value is string =>
-              typeof value === "string" &&
-              (/^PACC_[A-Z0-9_]+$/.test(key) ||
-                key === "ANTHROPIC_BASE_URL" ||
-                key === "ANTHROPIC_AUTH_TOKEN" ||
-                key === "ANTHROPIC_API_KEY"),
-          ),
-        ),
+        // PACC_* + model-endpoint credentials, for the pacc plugin only
+        // (see plugin-host-env.ts) — other plugins never see the token.
+        env: pluginHostEnv(pluginKey),
       };
 
       // Repo-local plugin installs can resolve workspace TS sources at runtime
