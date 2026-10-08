@@ -396,4 +396,12 @@ describe("steward hallucination tripwire, floor era", () => {
     const strict = detectHallucinations({ briefMarkdown: "a follow-up", knownIds: new Set() });
     expect(strict.map((f) => f.reference)).toEqual(["follow-up"]);
   });
+
+  it("skips longer prose runs held by a connector or a number (2026-10-08 false pause)", async () => {
+    const { detectHallucinations } = await import("../lib/briefer/hallucination.js");
+    const md =
+      "Done-last-7-days split; the provider-funds-a-pilot question; follow-up is likely face-to-face; I cannot flag approach-to-kill. But circlo-discovery-sprint and plan-2-v3x are new.";
+    const flags = detectHallucinations({ briefMarkdown: md, knownIds: new Set(), ignoreProseCompounds: true });
+    expect(flags.map((f) => f.reference).sort()).toEqual(["circlo-discovery-sprint", "plan-2-v3x"]);
+  });
 });

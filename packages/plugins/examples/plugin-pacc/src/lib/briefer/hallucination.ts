@@ -175,7 +175,7 @@ export function detectHallucinations(
   for (const ref of tokens) {
     const lc = ref.toLowerCase();
     if (knownLc.has(lc) || allowLc.has(lc)) continue;
-    if (input.ignoreProseCompounds && (/^[a-z]+-[a-z]+$/.test(lc) || /^\d+-[a-z]+$/.test(lc))) continue;
+    if (input.ignoreProseCompounds && isProseCompound(lc)) continue;
     if (sourcePathsLc.some((p) => p.includes(lc))) continue;
     if (groundingPhrasesLc.some((p) => p.includes(lc))) continue;
     flags.push({
@@ -237,6 +237,22 @@ export function annotateHallucinations(
 // ---------------------------------------------------------------------------
 // Reference normalization (D-39)
 // ---------------------------------------------------------------------------
+
+/** Connector words that make a hyphenated run English ("face-to-face", "provider-funds-a-pilot"). */
+const PROSE_CONNECTORS = new Set(["a", "an", "the", "to", "of", "in", "on", "for", "by", "with", "and", "or", "per", "vs", "as", "at", "from"]);
+
+/**
+ * Floor-era prose compounds (steward only): two-part words ("follow-up",
+ * "3-day"), and longer runs held together by a connector word or a bare number
+ * ("approach-to-kill", "last-7-days"). Line slugs and item UUIDs have neither,
+ * so an invented id like "circlo-discovery-sprint" is still checked.
+ */
+export function isProseCompound(lc: string): boolean {
+  if (/^[a-z]+-[a-z]+$/.test(lc) || /^\d+-[a-z]+$/.test(lc)) return true;
+  const parts = lc.split("-");
+  if (parts.length < 3 || !parts.every((x) => /^[a-z]+$|^\d+$/.test(x))) return false;
+  return parts.slice(1, -1).some((x) => PROSE_CONNECTORS.has(x) || /^\d+$/.test(x));
+}
 
 /** Trailing punctuation commonly attached to a reference inside prose. */
 const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
