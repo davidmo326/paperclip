@@ -33,7 +33,7 @@ const BOOKKEEPING_TYPES = new Set([EVENT_ENTITY_TYPE, IDEMPOTENCY_ENTITY_TYPE]);
 /** Fields that change on every write and say nothing about intent. */
 const NOISE_FIELDS = new Set(["rev", "updatedAt"]);
 /** Append-only logs inside records: report how many entries were added. */
-const APPEND_FIELDS = new Set(["edits", "history"]);
+const APPEND_FIELDS = new Set(["edits", "history", "mail"]);
 const MAX_INLINE_VALUE = 400;
 const MAX_STORED_RESULT = 16_000;
 

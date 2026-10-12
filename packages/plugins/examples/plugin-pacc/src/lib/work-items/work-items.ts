@@ -130,7 +130,49 @@ export interface WorkItem {
   history: StageMove[];
   /** The CoS's original proposal (absent on items the CoS did not propose). */
   proposed?: ProposalSnapshot | null;
+  /** Mail about this item, append-only (FABRIC_SPEC D.5; ADR 0007). Absent until the first message. */
+  mail?: MailEntry[];
 }
+
+export const MAIL_STATUSES = ["queued", "claimed", "delivered", "answered", "dropped"] as const;
+export type MailStatus = (typeof MAIL_STATUSES)[number];
+
+/**
+ * One message from one role to another, about this item (CONTEXT.md: Mail).
+ * `from` is the writing actor, never a payload field: the cockpit derives the
+ * actor at its door (ADR 0007 rule 7). A message to an agent starts `queued`
+ * and the cockpit wakes the agent; a reply to the principal is `delivered` on
+ * arrival, because it is read on the item, never pushed (Needs you stays the
+ * one attention primitive).
+ */
+export interface MailEntry {
+  id: string;
+  from: string;
+  to: string;
+  body: string;
+  status: MailStatus;
+  ts: string;
+  /** The message this one answers (the first message of a thread has none). */
+  replyTo: string | null;
+  claimedBy: string | null;
+  claimedAt: string | null;
+  surface: string | null;
+}
+
+/** Messages written by agents on one item before only a Needs-you item may follow (D.5 bounds). */
+export const MAX_AGENT_MAIL = 4;
+export const MAX_MAIL_BODY = 4000;
+const MAIL_ID = /^[A-Za-z0-9_-]{6,64}$/;
+const MAIL_ADDRESS = /^(principal|agent:[A-Za-z0-9._:@-]+)$/;
+/** Actors that may move a message's status: the cockpit (claims, delivery) and the principal. */
+const MAIL_STATUS_ACTORS = new Set([RUNTIME_ACTOR, "principal"]);
+const MAIL_MOVES: Record<MailStatus, readonly MailStatus[]> = {
+  queued: ["claimed", "dropped"],
+  claimed: ["queued", "delivered", "dropped"],
+  delivered: ["answered"],
+  answered: [],
+  dropped: [],
+};
 
 export class WorkItemValidationError extends Error {}
 
@@ -217,6 +259,70 @@ export interface WorkItemPatch {
   linkSession?: Partial<SessionLink> | null;
   /** Record what a hand brought back. */
   result?: Partial<RunResult> | null;
+  /** Append one message (deduped by id; `from` is the actor). */
+  message?: { id?: string; to?: string; body?: string; replyTo?: string | null; surface?: string | null } | null;
+  /** Move one message's status (the cockpit's claim and delivery; the principal may drop). */
+  mailStatus?: { id?: string; status?: string; claimedBy?: string | null } | null;
+}
+
+function appendMessage(item: WorkItem, m: NonNullable<WorkItemPatch["message"]>, actor: string, at: string): MailEntry[] {
+  const mail = [...(item.mail ?? [])];
+  const id = optStr(m.id);
+  if (!id || !MAIL_ID.test(id)) throw new WorkItemValidationError("message needs an id of 6–64 letters, digits, _ or -");
+  if (mail.some((x) => x.id === id)) return mail; // a replay of the same message
+  if (!MAIL_ADDRESS.test(actor)) throw new WorkItemValidationError(`${actor} may not write mail`);
+  const to = optStr(m.to);
+  if (!to || !MAIL_ADDRESS.test(to)) throw new WorkItemValidationError("message.to must be principal or agent:<role>");
+  if (to === actor) throw new WorkItemValidationError("a message cannot be addressed to its sender");
+  const body = optStr(m.body);
+  if (!body) throw new WorkItemValidationError("message.body cannot be empty");
+  if (body.length > MAX_MAIL_BODY) throw new WorkItemValidationError(`message.body is over ${MAX_MAIL_BODY} characters`);
+  const replyTo = optStr(m.replyTo);
+  const parent = replyTo ? mail.find((x) => x.id === replyTo) : undefined;
+  if (replyTo && !parent) throw new WorkItemValidationError(`message.replyTo ${replyTo} is not on this item`);
+  if (actor !== "principal") {
+    // an agent may write only a reply to a message addressed to it, back to its sender
+    if (!parent || parent.to !== actor || parent.from !== to) {
+      throw new WorkItemValidationError("an agent may only reply to a message sent to it, to its sender");
+    }
+    if (mail.filter((x) => x.from !== "principal").length >= MAX_AGENT_MAIL) {
+      throw new WorkItemValidationError(`${MAX_AGENT_MAIL} agent messages on this item already; raise a Needs-you item instead`);
+    }
+  }
+  if (parent && parent.status === "delivered") {
+    mail[mail.indexOf(parent)] = { ...parent, status: "answered" };
+  }
+  mail.push({
+    id,
+    from: actor,
+    to,
+    body,
+    status: to === "principal" ? "delivered" : "queued",
+    ts: at,
+    replyTo,
+    claimedBy: null,
+    claimedAt: null,
+    surface: optStr(m.surface),
+  });
+  return mail;
+}
+
+function moveMail(item: WorkItem, s: NonNullable<WorkItemPatch["mailStatus"]>, actor: string, at: string): MailEntry[] {
+  if (!MAIL_STATUS_ACTORS.has(actor)) throw new WorkItemValidationError(`${actor} may not move mail`);
+  const mail = [...(item.mail ?? [])];
+  const i = mail.findIndex((x) => x.id === optStr(s.id));
+  if (i === -1) throw new WorkItemValidationError(`message ${String(s.id)} is not on this item`);
+  const to = oneOf(MAIL_STATUSES, s.status, "mailStatus.status");
+  const cur = mail[i];
+  if (to === cur.status) return mail;
+  if (!MAIL_MOVES[cur.status].includes(to)) throw new WorkItemValidationError(`message ${cur.id}: ${cur.status} → ${to} is not a move`);
+  mail[i] =
+    to === "claimed"
+      ? { ...cur, status: to, claimedBy: optStr(s.claimedBy), claimedAt: at }
+      : to === "queued"
+        ? { ...cur, status: to, claimedBy: null, claimedAt: null }
+        : { ...cur, status: to };
+  return mail;
 }
 
 function sessionLink(v: Partial<SessionLink>, at: string): SessionLink {
@@ -278,6 +384,8 @@ export function applyPatch(item: WorkItem, patch: WorkItemPatch, opts: { now: Da
     next.sessions = sessions;
   }
   if (patch.result !== undefined) next.result = patch.result === null ? null : runResult(patch.result, at);
+  if (patch.message) next.mail = appendMessage(next, patch.message, opts.actor, at);
+  if (patch.mailStatus) next.mail = moveMail(next, patch.mailStatus, opts.actor, at);
   if (patch.stage !== undefined) {
     const to = oneOf(STAGES, patch.stage, "stage");
     if (to !== item.stage) {
