@@ -65,6 +65,14 @@ describe("mail on a work item (FABRIC_SPEC D.5, ADR 0007)", () => {
       applyPatch(d2, { message: { id: "msg-000002", to: "principal", body: "hi", replyTo: "msg-000001" } }, { now, actor: "agent:t@omarchy-desktop" }),
     ).toThrow(/only reply/);
     const replied = applyPatch(d2, { message: { id: "msg-000002", to: "principal", body: "Added.", replyTo: "msg-000001" } }, { now: later, actor: HAND });
+    // one reply per delivered message
+    expect(() =>
+      applyPatch(replied, { message: { id: "msg-000003", to: "principal", body: "again", replyTo: "msg-000001" } }, { now, actor: HAND }),
+    ).toThrow(/replies once/);
+    // nor to a message still queued (not yet delivered to it)
+    expect(() => applyPatch(sent(), { message: { id: "msg-000003", to: "principal", body: "x", replyTo: "msg-000001" } }, { now, actor: HAND })).toThrow(
+      /replies once/,
+    );
     expect(replied.mail!.map((m) => [m.id, m.status, m.from, m.to])).toEqual([
       ["msg-000001", "answered", "principal", HAND],
       ["msg-000002", "delivered", HAND, "principal"],
@@ -77,6 +85,8 @@ describe("mail on a work item (FABRIC_SPEC D.5, ADR 0007)", () => {
       const q = `msg-q${String(n).padStart(5, "0")}`;
       const r = `msg-r${String(n).padStart(5, "0")}`;
       it1 = applyPatch(it1, { message: { id: q, to: HAND, body: "question" } }, { now, actor: "principal" });
+      it1 = applyPatch(it1, { mailStatus: { id: q, status: "claimed" } }, { now, actor: "runtime" });
+      it1 = applyPatch(it1, { mailStatus: { id: q, status: "delivered" } }, { now, actor: "runtime" });
       const reply = () => applyPatch(it1, { message: { id: r, to: "principal", body: "answer", replyTo: q } }, { now, actor: HAND });
       if (n < MAX_AGENT_MAIL) it1 = reply();
       else expect(reply).toThrow(/Needs-you/);

@@ -285,6 +285,9 @@ function appendMessage(item: WorkItem, m: NonNullable<WorkItemPatch["message"]>,
     if (!parent || parent.to !== actor || parent.from !== to) {
       throw new WorkItemValidationError("an agent may only reply to a message sent to it, to its sender");
     }
+    if (parent.status !== "delivered") {
+      throw new WorkItemValidationError(`message ${parent.id} is ${parent.status}; an agent replies once, to a delivered message`);
+    }
     if (mail.filter((x) => x.from !== "principal").length >= MAX_AGENT_MAIL) {
       throw new WorkItemValidationError(`${MAX_AGENT_MAIL} agent messages on this item already; raise a Needs-you item instead`);
     }
