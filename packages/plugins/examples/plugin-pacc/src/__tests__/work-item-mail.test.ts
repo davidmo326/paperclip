@@ -79,6 +79,15 @@ describe("mail on a work item (FABRIC_SPEC D.5, ADR 0007)", () => {
     ]);
   });
 
+  it("takes the reply while the wake still holds the message claimed (live run, 13 Oct)", () => {
+    const claimed = applyPatch(sent(), { mailStatus: { id: "msg-000001", status: "claimed", claimedBy: "thinkpad-e15" } }, { now, actor: "runtime" });
+    const replied = applyPatch(claimed, { message: { id: "msg-000002", to: "principal", body: "Sandbox, not my change.", replyTo: "msg-000001" } }, { now: later, actor: HAND });
+    expect(replied.mail!.map((m) => m.status)).toEqual(["answered", "delivered"]);
+    // the run's settle afterwards cannot move an answered message back
+    expect(() => applyPatch(replied, { mailStatus: { id: "msg-000001", status: "delivered" } }, { now, actor: "runtime" })).toThrow(/not a move/);
+    expect(() => applyPatch(replied, { mailStatus: { id: "msg-000001", status: "queued" } }, { now, actor: "runtime" })).toThrow(/not a move/);
+  });
+
   it(`bounds agent mail at ${MAX_AGENT_MAIL} per item`, () => {
     let it1 = item();
     for (let n = 0; n <= MAX_AGENT_MAIL; n++) {

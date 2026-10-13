@@ -285,14 +285,15 @@ function appendMessage(item: WorkItem, m: NonNullable<WorkItemPatch["message"]>,
     if (!parent || parent.to !== actor || parent.from !== to) {
       throw new WorkItemValidationError("an agent may only reply to a message sent to it, to its sender");
     }
-    if (parent.status !== "delivered") {
-      throw new WorkItemValidationError(`message ${parent.id} is ${parent.status}; an agent replies once, to a delivered message`);
+    // claimed: the wake is reading it now (the cockpit settles it to delivered only after the run ends)
+    if (parent.status !== "claimed" && parent.status !== "delivered") {
+      throw new WorkItemValidationError(`message ${parent.id} is ${parent.status}; an agent replies once, to a message delivered to it`);
     }
     if (mail.filter((x) => x.from !== "principal").length >= MAX_AGENT_MAIL) {
       throw new WorkItemValidationError(`${MAX_AGENT_MAIL} agent messages on this item already; raise a Needs-you item instead`);
     }
   }
-  if (parent && parent.status === "delivered") {
+  if (parent && (parent.status === "claimed" || parent.status === "delivered")) {
     mail[mail.indexOf(parent)] = { ...parent, status: "answered" };
   }
   mail.push({
