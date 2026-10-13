@@ -132,6 +132,51 @@ export interface WorkItem {
   proposed?: ProposalSnapshot | null;
   /** Mail about this item, append-only (FABRIC_SPEC D.5; ADR 0007). Absent until the first message. */
   mail?: MailEntry[];
+  /** The CoS's review of the latest result (FABRIC_SPEC D.8). Absent until reviewed. */
+  review?: Review | null;
+}
+
+export const REVIEW_VERDICTS = ["done", "your-call", "send-back"] as const;
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
+export const REVIEW_ROUTES = ["done", "sent-back", "needs-you"] as const;
+export type ReviewRoute = (typeof REVIEW_ROUTES)[number];
+const MAX_REVIEW_NOTE = 1200;
+
+/**
+ * The CoS's review of one result: its verdict, what was done with the item
+ * (the cockpit routes only small build items; everything else lands in Needs
+ * you with the verdict on it), and how many times it has sent the item back.
+ */
+export interface Review {
+  by: string;
+  verdict: ReviewVerdict;
+  note: string;
+  routed: ReviewRoute;
+  /** the reviewed result's `at`, so a new result is reviewed again */
+  resultAt: string | null;
+  sendBacks: number;
+  at: string;
+}
+
+/** Who may write a review: the cockpit, on the CoS's behalf (the CoS's run never writes the record itself). */
+const REVIEW_ACTORS = new Set([RUNTIME_ACTOR, "cos"]);
+
+function reviewOf(v: NonNullable<WorkItemPatch["review"]>, actor: string, at: string): Review {
+  if (!REVIEW_ACTORS.has(actor)) throw new WorkItemValidationError(`${actor} may not write a review`);
+  const by = optStr(v.by);
+  if (!by || !/^agent:[A-Za-z0-9._:@-]+$/.test(by)) throw new WorkItemValidationError("review.by must be an agent address");
+  const note = optStr(v.note) ?? "";
+  if (note.length > MAX_REVIEW_NOTE) throw new WorkItemValidationError(`review.note is over ${MAX_REVIEW_NOTE} characters`);
+  const sendBacks = Number.isInteger(v.sendBacks) && (v.sendBacks as number) >= 0 && (v.sendBacks as number) <= 10 ? (v.sendBacks as number) : 0;
+  return {
+    by,
+    verdict: oneOf(REVIEW_VERDICTS, v.verdict ?? "", "review.verdict"),
+    note,
+    routed: oneOf(REVIEW_ROUTES, v.routed ?? "", "review.routed"),
+    resultAt: optStr(v.resultAt),
+    sendBacks,
+    at,
+  };
 }
 
 export const MAIL_STATUSES = ["queued", "claimed", "delivered", "answered", "dropped"] as const;
@@ -263,6 +308,8 @@ export interface WorkItemPatch {
   message?: { id?: string; to?: string; body?: string; replyTo?: string | null; surface?: string | null } | null;
   /** Move one message's status (the cockpit's claim and delivery; the principal may drop). */
   mailStatus?: { id?: string; status?: string; claimedBy?: string | null } | null;
+  /** The CoS's review of the latest result (cockpit / CoS only). */
+  review?: { by?: string; verdict?: string; note?: string; routed?: string; resultAt?: string | null; sendBacks?: number } | null;
 }
 
 function appendMessage(item: WorkItem, m: NonNullable<WorkItemPatch["message"]>, actor: string, at: string): MailEntry[] {
@@ -390,6 +437,7 @@ export function applyPatch(item: WorkItem, patch: WorkItemPatch, opts: { now: Da
   if (patch.result !== undefined) next.result = patch.result === null ? null : runResult(patch.result, at);
   if (patch.message) next.mail = appendMessage(next, patch.message, opts.actor, at);
   if (patch.mailStatus) next.mail = moveMail(next, patch.mailStatus, opts.actor, at);
+  if (patch.review !== undefined) next.review = patch.review === null ? null : reviewOf(patch.review, opts.actor, at);
   if (patch.stage !== undefined) {
     const to = oneOf(STAGES, patch.stage, "stage");
     if (to !== item.stage) {
