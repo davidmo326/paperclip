@@ -19,6 +19,15 @@ function section(title: string, body: string | null | undefined): string[] {
   return [`### ${title}`, body.trim(), ""];
 }
 
+/** How a hand treats each work type: one line on the card, so the type means something to the hand. */
+export const TYPE_RULE: Record<string, string> = {
+  build: "Build: change the code or files the item names, run the checks, and say what you verified.",
+  "hypothesis-design": "Design: shape a test or a plan for the key question. Write it down; build nothing yet.",
+  "market-contact": "Contact: prepare the outreach. Put any message in `draft` for the principal; never send it.",
+  explore:
+    "Explore: assess it as an idea only, against this project. Change no code. Write what you found to `docs/reviews/<YYYY-MM-DD>-<short-name>.md` in the repo (in the result only, when there is no repo): what it is, what we would take (the idea, not the platform), what we already have, and one recommendation. Follow-ups are proposals, never builds.",
+};
+
 export function renderDispatchCard(input: {
   line: ProjectLine | null;
   item: WorkItem;
@@ -76,6 +85,7 @@ export function renderDispatchCard(input: {
     out.push("### Other open items on this line (context only — do not work them)", ...siblings.map((s) => `- [${s.stage}] ${s.title}`), "");
   }
 
+  out.push("### What this type asks of you", TYPE_RULE[item.workType] ?? TYPE_RULE.build, "");
   out.push(
     "### Rules",
     "- Work only inside the project's repo/worktree. Never post, send, email or publish anything: put any outward text in the result as a draft for the principal to approve.",

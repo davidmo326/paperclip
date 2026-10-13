@@ -141,6 +141,19 @@ describe("context carry", () => {
     expect(card).toBe(renderDispatchCard({ line, item }));
   });
 
+  it("says what each work type asks of the hand; explore is an idea only, no code", () => {
+    const line = lineFromSeed(SEED, { now: NOW, actor: "principal" });
+    const card = (workType: string) =>
+      renderDispatchCard({ line, item: makeWorkItem({ projectId: "hometrics", title: "x", workType, size: "bite" }, { id: "i1", now: NOW, actor: "principal" }) });
+    expect(card("market-contact")).toContain("never send it");
+    expect(card("build")).toContain("Build: change the code");
+    const explore = card("explore");
+    expect(explore).toContain("type: explore");
+    expect(explore).toContain("assess it as an idea only");
+    expect(explore).toContain("Change no code");
+    expect(explore).toContain("docs/reviews/");
+  });
+
   it("parses the last result block and tolerates junk", () => {
     const out = [
       "working…",

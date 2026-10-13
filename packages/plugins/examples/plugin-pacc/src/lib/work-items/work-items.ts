@@ -14,7 +14,7 @@
  *  - Dates never drive priority: items carry timestamps for history only.
  */
 
-export const WORK_TYPES = ["build", "market-contact", "hypothesis-design"] as const;
+export const WORK_TYPES = ["build", "market-contact", "hypothesis-design", "explore"] as const;
 export const SIZES = ["bite", "deep"] as const;
 export const STAGES = ["intake", "triage", "in-progress", "needs-you", "done"] as const;
 
