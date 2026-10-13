@@ -1002,6 +1002,25 @@ const plugin: PaperclipPlugin = definePlugin({
       return { resumed: true, priorReason: prior.reason };
     });
 
+    // F-3b.7: the principal pauses the steward's scheduled run (e.g. while the
+    // chief of staff's home answers mail, FABRIC_SPEC D.5). The same flag the
+    // tripwire sets, so a paused run writes its stub journal and resume-steward clears it.
+    ctx.actions.register("pause-steward", async (params) => {
+      const raw = typeof (params as { reason?: unknown })?.reason === "string" ? (params as { reason: string }).reason.trim() : "";
+      const reason = `paused by the principal${raw ? `: ${raw.slice(0, 200)}` : ""}`;
+      const key = { scopeKind: "instance" as const, namespace: PLUGIN_NAMESPACE, stateKey: STEWARD_PAUSED_STATE_KEY };
+      const prior = (await ctx.state.get(key)) as { paused?: boolean; reason?: string | null } | null;
+      if (prior?.paused === true) return { paused: true, reason: prior.reason ?? reason, already: true };
+      await ctx.state.set(key, { paused: true, reason, pausedAt: new Date().toISOString() });
+      await ctx.events.emit("agent.paused", (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? "instance", {
+        agent: "steward",
+        actor: "principal",
+        at: new Date().toISOString(),
+        reason,
+      });
+      return { paused: true, reason, already: false };
+    });
+
     // T-3.12 (D-39): the current 24h hallucination-flag window, one row per
     // unique normalized reference (not per flagged run).
     ctx.data.register("steward-paused", async () => {
