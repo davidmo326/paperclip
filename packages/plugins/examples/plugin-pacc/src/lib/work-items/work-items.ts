@@ -134,6 +134,42 @@ export interface WorkItem {
   mail?: MailEntry[];
   /** The CoS's review of the latest result (FABRIC_SPEC D.8). Absent until reviewed. */
   review?: Review | null;
+  /** Who the card is for (Addendum J, P10): David, or the agents. Absent = the cockpit's rule decides. */
+  audience?: Audience | null;
+  /** The card in David's plain words (Addendum M): what it is about, what is asked, his options. */
+  forMe?: ForMe | null;
+}
+
+export const AUDIENCES = ["me", "agents"] as const;
+export type Audience = (typeof AUDIENCES)[number];
+
+/** A card written for David: three plain lines and his options, the recommended one first. */
+export interface ForMe {
+  about: string;
+  ask: string;
+  options: string[];
+  recommend: string | null;
+  by: string;
+  at: string;
+}
+const MAX_FOR_ME = 300;
+
+/** Who may set the audience and write the plain card: the principal sets audience; the cockpit writes for the CoS. */
+const AUDIENCE_ACTORS = new Set([RUNTIME_ACTOR, "cos", "principal"]);
+const FOR_ME_ACTORS = new Set([RUNTIME_ACTOR, "cos"]);
+
+function forMeOf(v: NonNullable<WorkItemPatch["forMe"]>, actor: string, at: string): ForMe {
+  if (!FOR_ME_ACTORS.has(actor)) throw new WorkItemValidationError(`${actor} may not write the card for the principal`);
+  const line = (x: unknown, name: string) => {
+    const t = (optStr(x) ?? "").replace(/\s+/g, " ").trim();
+    if (!t) throw new WorkItemValidationError(`forMe.${name} is required`);
+    if (t.length > MAX_FOR_ME) throw new WorkItemValidationError(`forMe.${name} is over ${MAX_FOR_ME} characters`);
+    return t;
+  };
+  const options = Array.isArray(v.options) ? v.options.slice(0, 4).map((o, i) => line(o, `options[${i}]`)) : [];
+  const by = optStr(v.by);
+  if (!by || !/^agent:[A-Za-z0-9._:@-]+$/.test(by)) throw new WorkItemValidationError("forMe.by must be an agent address");
+  return { about: line(v.about, "about"), ask: line(v.ask, "ask"), options, recommend: optStr(v.recommend), by, at };
 }
 
 export const REVIEW_VERDICTS = ["done", "your-call", "send-back"] as const;
@@ -310,6 +346,10 @@ export interface WorkItemPatch {
   mailStatus?: { id?: string; status?: string; claimedBy?: string | null } | null;
   /** The CoS's review of the latest result (cockpit / CoS only). */
   review?: { by?: string; verdict?: string; note?: string; routed?: string; resultAt?: string | null; sendBacks?: number } | null;
+  /** Who the card is for (principal, cos or the cockpit). */
+  audience?: string | null;
+  /** The card in the principal's plain words (cos or the cockpit only). */
+  forMe?: { about?: string; ask?: string; options?: string[]; recommend?: string | null; by?: string } | null;
 }
 
 function appendMessage(item: WorkItem, m: NonNullable<WorkItemPatch["message"]>, actor: string, at: string): MailEntry[] {
@@ -438,6 +478,11 @@ export function applyPatch(item: WorkItem, patch: WorkItemPatch, opts: { now: Da
   if (patch.message) next.mail = appendMessage(next, patch.message, opts.actor, at);
   if (patch.mailStatus) next.mail = moveMail(next, patch.mailStatus, opts.actor, at);
   if (patch.review !== undefined) next.review = patch.review === null ? null : reviewOf(patch.review, opts.actor, at);
+  if (patch.audience !== undefined) {
+    if (!AUDIENCE_ACTORS.has(opts.actor)) throw new WorkItemValidationError(`${opts.actor} may not set the audience`);
+    next.audience = patch.audience === null ? null : oneOf(AUDIENCES, patch.audience, "audience");
+  }
+  if (patch.forMe !== undefined) next.forMe = patch.forMe === null ? null : forMeOf(patch.forMe, opts.actor, at);
   if (patch.stage !== undefined) {
     const to = oneOf(STAGES, patch.stage, "stage");
     if (to !== item.stage) {
