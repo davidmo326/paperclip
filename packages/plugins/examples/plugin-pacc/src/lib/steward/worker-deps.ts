@@ -35,11 +35,17 @@ import { promoteJournalToFloor, readStewardFloor } from "../lines/floor-actions.
 import { makeWorkItemDeps } from "../work-items/work-item-deps.js";
 import { vaultWritesEnabled } from "../briefer/obsidian-writer.js";
 import { STEWARD_ACTOR, assertStewardL1, type StewardDeps } from "./steward.js";
-import type { ScheduledStewardDeps } from "./scheduled-steward.js";
+import {
+  assertScheduledStewardDeps,
+  type ScheduledStewardDeps,
+  type StewardJournalStoreDeps,
+  type StewardPauseDeps,
+} from "./scheduled-steward.js";
 import {
   STEWARD_IN_PROGRESS_STATE_KEY,
   STEWARD_JOURNAL_DELTA_STATE_KEY,
   STEWARD_JOURNAL_STORE_STATE_KEY,
+  STEWARD_JOURNAL_PAUSED_STATE_KEY,
   STEWARD_PAUSED_STATE_KEY,
   HALLUCINATION_FLAGS_STATE_KEY,
   BRIEF_STORE_STATE_KEY,
@@ -307,6 +313,57 @@ export function makeStewardHallucinationDeps(
   };
 }
 
+/** The steward's own pause flag, read on every run (F-cos.0: a required dependency). */
+export function makeStewardPauseDeps(ctx: Pick<StewardWorkerCtx, "state">): StewardPauseDeps {
+  return {
+    async isPaused() {
+      const v = (await ctx.state.get(instanceKey(STEWARD_PAUSED_STATE_KEY))) as
+        | { paused?: unknown; reason?: unknown }
+        | null;
+      if (v === null || typeof v !== "object") return { paused: false, reason: null };
+      return { paused: v.paused === true, reason: typeof v.reason === "string" ? v.reason : null };
+    },
+  };
+}
+
+/**
+ * The record's journal store, read back exactly as saveJournal writes it: the
+ * journal under namespace = journal date, the delta baseline's `journalDate`,
+ * and the paused-day marker beside the journal. Any of the three means the day
+ * is accounted for, so a restart never starts a second run (F-cos.0).
+ */
+export function makeStewardJournalStore(
+  ctx: Pick<StewardWorkerCtx, "state">,
+  clock: () => Date = () => new Date(),
+): StewardJournalStoreDeps {
+  return {
+    async journalExists(journalDate) {
+      const journal = await ctx.state.get({
+        scopeKind: "instance",
+        namespace: journalDate,
+        stateKey: STEWARD_JOURNAL_STORE_STATE_KEY,
+      });
+      if (journal !== null && journal !== undefined) return true;
+      const marker = (await ctx.state.get({
+        scopeKind: "instance",
+        namespace: journalDate,
+        stateKey: STEWARD_JOURNAL_PAUSED_STATE_KEY,
+      })) as { journalDate?: unknown } | null;
+      if (marker !== null && typeof marker === "object" && marker.journalDate === journalDate) return true;
+      const delta = (await ctx.state.get(instanceKey(STEWARD_JOURNAL_DELTA_STATE_KEY))) as
+        | { journalDate?: unknown }
+        | null;
+      return delta !== null && typeof delta === "object" && delta.journalDate === journalDate;
+    },
+    async markPausedDay(journalDate, reason) {
+      await ctx.state.set(
+        { scopeKind: "instance", namespace: journalDate, stateKey: STEWARD_JOURNAL_PAUSED_STATE_KEY },
+        { journalDate, paused: true, reason, markedAt: clock().toISOString() },
+      );
+    },
+  };
+}
+
 export interface MakeScheduledStewardDepsResult {
   deps: ScheduledStewardDeps;
   eventCompanyId: string;
@@ -364,8 +421,11 @@ export async function makeScheduledStewardDeps(
       await ctx.events.emit(name, eventCompanyId, payload);
     },
     logger: ctx.logger,
+    paused: makeStewardPauseDeps(ctx),
+    journalStore: makeStewardJournalStore(ctx),
     hallucination: { ...makeStewardHallucinationDeps(ctx, knownIds), groundingText },
   };
+  assertScheduledStewardDeps(deps);
 
   return { deps, eventCompanyId, model, guard: m1b.guard, registryWarnings: m1b.registryWarnings };
 }

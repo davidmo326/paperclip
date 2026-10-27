@@ -4,11 +4,12 @@
  * Exercises the pipeline (pause check → lock → runSteward → save → drafts →
  * render → hallucination tripwire → Obsidian write → event → release) with
  * mocked StewardDeps, an in-memory lock store, and a real tmpdir for the
- * journal write. Also covers the missed-run catch-up decision.
+ * journal write. Also covers the missed-run catch-up decision, keyed on the
+ * record's own journal store (F-cos.0), and the required pause dependency.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -16,9 +17,19 @@ import {
   checkMissedStewardRun,
   runMissedStewardCatchUp,
   runScheduledSteward,
-  STEWARD_JOURNAL_FILENAME_PREFIX,
+  stewardPauseReason,
+  stewardResumeActor,
+  stewardResumeRefusal,
   type ScheduledStewardDeps,
+  type StewardJournalStoreDeps,
 } from "../lib/steward/scheduled-steward.js";
+import { makeStewardJournalStore, makeStewardPauseDeps } from "../lib/steward/worker-deps.js";
+import {
+  PLUGIN_NAMESPACE,
+  STEWARD_JOURNAL_DELTA_STATE_KEY,
+  STEWARD_JOURNAL_STORE_STATE_KEY,
+  STEWARD_PAUSED_STATE_KEY,
+} from "../constants.js";
 import type { StewardDeps } from "../lib/steward/steward.js";
 import type { BrieferProjectInput, ValueAnchorSummary } from "../lib/briefer/types.js";
 import type {
@@ -91,7 +102,7 @@ const ANCHORS: ValueAnchorSummary[] = [{ name: "Ship Small", purpose: "small bet
 interface MockSteward {
   projects: BrieferProjectInput[];
   modelText: string | null;
-  savedJournals: unknown[];
+  savedJournals: Array<{ journalDate: string }>;
   drafts: Array<{ path: string; content: string }>;
   draftShouldThrow: boolean;
 }
@@ -139,12 +150,29 @@ interface DepsState {
   lock: InMemoryLock;
   events: Array<{ name: string; payload: Record<string, unknown> }>;
   logs: Array<{ level: string; msg: string; fields?: Record<string, unknown> }>;
+  pause: { paused: boolean; reason: string | null };
+  /** Paused-day markers the run wrote into the record's journal store. */
+  pausedDays: Map<string, string>;
+}
+
+/** The record's journal store for these tests: saved journals plus paused-day markers. */
+function makeJournalStore(state: DepsState): StewardJournalStoreDeps {
+  return {
+    async journalExists(date) {
+      return state.steward.savedJournals.some((j) => j.journalDate === date) || state.pausedDays.has(date);
+    },
+    async markPausedDay(date, reason) {
+      state.pausedDays.set(date, reason);
+    },
+  };
 }
 
 function makeDeps(state: DepsState, hallucination?: HallucinationDeps): ScheduledStewardDeps {
   return {
     steward: makeStewardDeps(state.steward),
     lock: state.lock,
+    paused: { isPaused: async () => state.pause },
+    journalStore: makeJournalStore(state),
     async emitEvent(name, payload) {
       state.events.push({ name, payload });
     },
@@ -163,6 +191,8 @@ function baseState(): DepsState {
     lock: new InMemoryLock(),
     events: [],
     logs: [],
+    pause: { paused: false, reason: null },
+    pausedDays: new Map(),
   };
 }
 
@@ -231,11 +261,13 @@ describe("runScheduledSteward (T-4.8)", () => {
 
   it("skipped_paused when the steward pause flag is set — writes a stub journal", async () => {
     const state = baseState();
+    state.pause = { paused: true, reason: "test pause" };
     const hallucination: HallucinationDeps = {
       knownIds: new Set(),
       readFlags: async () => null,
       writeFlags: async () => undefined,
-      isPaused: async () => ({ paused: true, reason: "test pause" }),
+      // The tripwire's own flag says "not paused": the run must read deps.paused.
+      isPaused: async () => ({ paused: false, reason: null }),
       setPaused: async () => undefined,
     };
     const result = await runScheduledSteward(makeDeps(state, hallucination), {
@@ -246,6 +278,43 @@ describe("runScheduledSteward (T-4.8)", () => {
     if (result.kind !== "skipped_paused") return;
     const markdown = await readFile(result.obsidianWrite.path, "utf8");
     expect(markdown).toContain("test pause");
+    expect(state.steward.savedJournals).toHaveLength(0);
+  });
+
+  it("paused with no hallucination deps still returns skipped_paused (F-cos.0)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "pacc-steward-paused-"));
+    try {
+      const state = baseState();
+      state.steward.projects = [{ projectId: "p-1", projectName: "P-1", card: makeCard("p-1") }];
+      state.pause = { paused: true, reason: "placeholder pause reason" };
+      const result = await runScheduledSteward(makeDeps(state), { now: NOW, obsidianBaseDir: dir });
+      expect(result.kind).toBe("skipped_paused");
+      expect(state.steward.savedJournals).toHaveLength(0);
+      expect(state.lock.state).toBeNull();
+      // The paused day is marked in the record's store, so a restart later
+      // that day never starts a catch-up run.
+      expect(state.pausedDays.get("2026-08-20")).toBe("placeholder pause reason");
+      const check = await checkMissedStewardRun({
+        now: new Date("2026-08-20T21:07:00"),
+        journalExists: makeJournalStore(state).journalExists,
+      });
+      expect(check).toEqual({ shouldRun: false, reason: "journal_already_exists" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a missing pause dependency throws, never skips the check (F-cos.0)", async () => {
+    const state = baseState();
+    state.steward.projects = [{ projectId: "p-1", projectName: "P-1", card: makeCard("p-1") }];
+    const { paused: _paused, ...withoutPause } = makeDeps(state);
+    await expect(
+      runScheduledSteward(withoutPause as unknown as ScheduledStewardDeps, { now: NOW, obsidianBaseDir: workdir }),
+    ).rejects.toThrow(/pause check is a required dependency/);
+    const { journalStore: _store, ...withoutStore } = makeDeps(state);
+    await expect(
+      runScheduledSteward(withoutStore as unknown as ScheduledStewardDeps, { now: NOW, obsidianBaseDir: workdir }),
+    ).rejects.toThrow(/journal store is a required dependency/);
     expect(state.steward.savedJournals).toHaveLength(0);
   });
 
@@ -344,41 +413,158 @@ describe("runScheduledSteward (T-4.8)", () => {
   });
 });
 
-describe("checkMissedStewardRun (T-4.8)", () => {
+describe("checkMissedStewardRun (T-4.8, keyed on the record — F-cos.0)", () => {
+  const none = async () => false;
+
   it("too early before the threshold hour", async () => {
-    const r = await checkMissedStewardRun({
-      now: new Date("2026-08-20T07:30:00"),
-      obsidianBaseDir: workdir,
-    });
+    const r = await checkMissedStewardRun({ now: new Date("2026-08-20T07:30:00"), journalExists: none });
     expect(r).toEqual({ shouldRun: false, reason: "too_early" });
   });
 
-  it("no catch-up when today's journal exists", async () => {
-    const r = await checkMissedStewardRun({
-      now: new Date("2026-08-20T10:00:00"),
-      obsidianBaseDir: workdir,
+  it("keys on the record's journal store, never the vault file", async () => {
+    // Input-only mode: no vault file is ever written, but the record holds
+    // today's journal. Vault keying says "missing" and starts a full run on
+    // every restart after 08:00 (the 27 Oct 21:07 and 21:21 runs); the record
+    // says it ran. This case fails on the old vault-file keying.
+    const asked: string[] = [];
+    const recordHasToday = await checkMissedStewardRun({
+      now: new Date("2026-08-20T21:07:00"),
+      journalExists: async (date) => {
+        asked.push(date);
+        return date === "2026-08-20";
+      },
     });
-    // The happy-path test above wrote a journal for 2026-08-20 in this dir.
-    const wroteOne = await stat(
-      path.join(workdir, `${STEWARD_JOURNAL_FILENAME_PREFIX}2026-08-20.md`),
-    ).then(() => true, () => false);
-    if (wroteOne) {
-      expect(r).toEqual({ shouldRun: false, reason: "journal_already_exists" });
-    } else {
-      expect(r.shouldRun).toBe(true);
-    }
+    expect(asked).toEqual(["2026-08-20"]);
+    expect(recordHasToday).toEqual({ shouldRun: false, reason: "journal_already_exists" });
+
+    // Nothing in the record for the day: the catch-up runs.
+    const recordEmpty = await checkMissedStewardRun({ now: new Date("2026-08-21T10:00:00"), journalExists: none });
+    expect(recordEmpty).toEqual({ shouldRun: true, reason: "missed_run_catch_up", journalDate: "2026-08-21" });
   });
 
-  it("catch-up runs the pipeline when the journal is missing", async () => {
+  it("an unreadable store fails closed (no catch-up), and a missing journalExists throws", async () => {
+    const r = await checkMissedStewardRun({
+      now: new Date("2026-08-20T10:00:00"),
+      journalExists: async () => {
+        throw new Error("store down");
+      },
+    });
+    expect(r).toEqual({ shouldRun: false, reason: "journal_store_unreadable" });
+    await expect(
+      checkMissedStewardRun({ now: new Date("2026-08-20T10:00:00") } as unknown as Parameters<typeof checkMissedStewardRun>[0]),
+    ).rejects.toThrow(/journalExists is a required dependency/);
+  });
+
+  it("catch-up runs the pipeline when the journal is missing, then not again that day", async () => {
     const state = baseState();
     state.steward.projects = [{ projectId: "p-1", projectName: "P-1", card: makeCard("p-1") }];
-    const outcome = await runMissedStewardCatchUp({
+    const deps = makeDeps(state);
+    const opts = {
       now: new Date("2026-08-22T10:00:00"),
       obsidianBaseDir: workdir,
+      journalExists: deps.journalStore.journalExists,
       logger: { info: () => undefined, warn: () => undefined },
-      runner: (options) => runScheduledSteward(makeDeps(state), options),
+      runner: (options: Parameters<typeof runScheduledSteward>[1]) => runScheduledSteward(deps, options),
+    };
+    const first = await runMissedStewardCatchUp(opts);
+    expect(first.ran).toBe(true);
+    if (first.ran) expect(first.result.kind).toBe("completed");
+    // A second restart the same day: the record now holds the journal.
+    const second = await runMissedStewardCatchUp({ ...opts, now: new Date("2026-08-22T21:21:00") });
+    expect(second).toEqual({ ran: false, reason: "journal_already_exists" });
+    expect(state.steward.savedJournals).toHaveLength(1);
+  });
+});
+
+describe("the record's journal store, read back as saveJournal writes it (F-cos.0)", () => {
+  function stubState() {
+    const store = new Map<string, unknown>();
+    const k = (x: { scopeKind: string; scopeId?: string; namespace?: string; stateKey: string }) =>
+      `${x.scopeKind}:${x.scopeId ?? ""}:${x.namespace ?? ""}:${x.stateKey}`;
+    return {
+      store,
+      state: {
+        async get(x: Parameters<typeof k>[0]) {
+          return store.get(k(x)) ?? null;
+        },
+        async set(x: Parameters<typeof k>[0], v: unknown) {
+          store.set(k(x), v);
+        },
+      },
+    };
+  }
+
+  it("finds the journal under namespace = date, the delta's journalDate, or the paused marker", async () => {
+    const s = stubState();
+    const ctx = { state: s.state } as unknown as Parameters<typeof makeStewardJournalStore>[0];
+    const fixed = () => new Date("2026-08-20T08:20:00.000Z");
+    const store = makeStewardJournalStore(ctx, fixed);
+    expect(await store.journalExists("2026-08-20")).toBe(false);
+
+    await s.state.set(
+      { scopeKind: "instance", namespace: "2026-08-20", stateKey: STEWARD_JOURNAL_STORE_STATE_KEY },
+      { journalDate: "2026-08-20" },
+    );
+    expect(await store.journalExists("2026-08-20")).toBe(true);
+    expect(await store.journalExists("2026-08-21")).toBe(false);
+
+    await s.state.set(
+      { scopeKind: "instance", namespace: PLUGIN_NAMESPACE, stateKey: STEWARD_JOURNAL_DELTA_STATE_KEY },
+      { journalDate: "2026-08-21", projectCardKeys: {} },
+    );
+    expect(await store.journalExists("2026-08-21")).toBe(true);
+
+    await store.markPausedDay("2026-08-22", "placeholder reason");
+    expect(await store.journalExists("2026-08-22")).toBe(true);
+    // The marker sits beside the journal, never on the journal's own key.
+    expect(
+      await s.state.get({ scopeKind: "instance", namespace: "2026-08-22", stateKey: STEWARD_JOURNAL_STORE_STATE_KEY }),
+    ).toBeNull();
+  });
+
+  it("the pause deps read the steward's own flag, tolerating a bad row", async () => {
+    const s = stubState();
+    const ctx = { state: s.state } as unknown as Parameters<typeof makeStewardPauseDeps>[0];
+    const pause = makeStewardPauseDeps(ctx);
+    expect(await pause.isPaused()).toEqual({ paused: false, reason: null });
+    const key = { scopeKind: "instance", namespace: PLUGIN_NAMESPACE, stateKey: STEWARD_PAUSED_STATE_KEY };
+    await s.state.set(key, { paused: true, reason: "placeholder" });
+    expect(await pause.isPaused()).toEqual({ paused: true, reason: "placeholder" });
+    await s.state.set(key, "not an object");
+    expect(await pause.isPaused()).toEqual({ paused: false, reason: null });
+  });
+});
+
+describe("resume-steward records its caller (F-cos.0)", () => {
+  it("uses the actor param when a string, else unknown — never principal by default", () => {
+    expect(stewardResumeActor({ actor: "principal" })).toBe("principal");
+    expect(stewardResumeActor({ actor: "  cockpit:token  " })).toBe("cockpit:token");
+    expect(stewardResumeActor({})).toBe("unknown");
+    expect(stewardResumeActor({ actor: 7 })).toBe("unknown");
+    expect(stewardResumeActor({ actor: "   " })).toBe("unknown");
+    expect(stewardResumeActor(undefined)).toBe("unknown");
+    expect(stewardResumeActor(null)).toBe("unknown");
+    expect(stewardResumeActor({ actor: "x".repeat(300) })).toHaveLength(100);
+  });
+
+  it("refuses a resume that names nobody, before anything changes", () => {
+    expect(stewardResumeRefusal({})).toMatch(/needs an actor/);
+    expect(stewardResumeRefusal({ actor: "  " })).toMatch(/needs an actor/);
+    expect(stewardResumeRefusal(undefined)).toMatch(/needs an actor/);
+    expect(stewardResumeRefusal({ actor: "principal:token" })).toBeNull();
+    expect(stewardResumeRefusal({ actor: "cli" })).toBeNull();
+  });
+});
+
+describe("pause-steward records its caller (F-cos.0)", () => {
+  it("tells the cockpit's own pause from the principal's and names anyone else", () => {
+    expect(stewardPauseReason({ actor: "cockpit", reason: "its home answers mail; re-paused at cockpit start" })).toEqual({
+      actor: "cockpit",
+      reason: "paused by the cockpit: its home answers mail; re-paused at cockpit start",
     });
-    expect(outcome.ran).toBe(true);
-    if (outcome.ran) expect(outcome.result.kind).toBe("completed");
+    expect(stewardPauseReason({ actor: "principal:token", reason: "its home answers mail" })).toEqual({ actor: "principal:token", reason: "paused by the principal: its home answers mail" });
+    expect(stewardPauseReason({ actor: "principal" })).toEqual({ actor: "principal", reason: "paused by the principal" });
+    expect(stewardPauseReason({ reason: "x" })).toEqual({ actor: "unknown", reason: "paused by unknown: x" });
+    expect(stewardPauseReason({ actor: "cli", reason: "y".repeat(300) }).reason).toHaveLength("paused by cli: ".length + 200);
   });
 });

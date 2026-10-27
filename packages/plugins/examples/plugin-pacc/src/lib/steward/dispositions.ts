@@ -8,6 +8,20 @@
  * and folds the rows into the H1 measure: the share of decided proposals the
  * principal accepted without rewriting. Pure; no new store (ADR 0005).
  *
+ * Only the principal's own move accepts (F-cos.0). When the first move out of
+ * Triage was made by anyone else — the chief of staff routing it, a session
+ * closing it — the proposal is never accepted on that move: an agent cannot
+ * grade its own proposal (the 27 Oct routes scored as accepted). A close by
+ * another actor is decided, never accepted (`closed-by-agent`). A route by
+ * another actor (into Needs you, or to a hand) only hands the proposal on: what
+ * the principal then does with it is the decision, so it is read from his first
+ * move after the route, and it stays pending until he makes one.
+ *
+ * Only proposals count: an item the cockpit's chief of staff makes as its own
+ * channel (the tree lines a close-out carries) is no proposal, and neither is a
+ * card made straight into Needs you (a season or weekly card): a proposal is
+ * one that lands in Triage or Intake for the principal to dispose of.
+ *
  * Rows go to the CoS raw, never as a summary: condensed "lessons" narrow the
  * search; the raw record lets the next run see exactly what was corrected.
  */
@@ -24,7 +38,9 @@ export type Disposition =
   /** Closed straight from Triage as done (finished without a hand-off). */
   | "done"
   /** Dropped at Triage. */
-  | "dropped";
+  | "dropped"
+  /** Closed out of Triage by an actor other than the principal. Never accepted. */
+  | "closed-by-agent";
 
 export interface ProposalRow {
   itemId: string;
@@ -43,15 +59,24 @@ export interface ProposalRow {
   nowTitle: string | null;
   /** When the item first left Triage (null while pending). */
   decidedAt: string | null;
-  /** The principal's note on that move, if any. */
+  /** The note on that move, if any (the principal's, unless an agent moved it). */
   note: string | null;
 }
 
 const ACCEPTED: ReadonlySet<Disposition> = new Set(["taken", "sent", "done"]);
 const UNDECIDED = new Set(["triage", "intake"]);
+/** The one actor whose move counts as a decision on a proposal. */
+const PRINCIPAL = "principal";
+
+/** The cockpit's tree channel (ControlPlane cockpit/src/reconcile.ts treeLinesTitle): its own bookkeeping, never a proposal. */
+const TREE_LINES_TITLE = /^Tree lines for .+'s next close-out$/;
 
 function isCos(item: WorkItem): boolean {
-  return item.createdBy === "cos";
+  if (item.createdBy !== "cos") return false;
+  if (TREE_LINES_TITLE.test(item.title)) return false;
+  // a proposal lands where the principal disposes of it; a card made straight into Needs you is not one
+  const made = item.history[0];
+  return !made || made.from !== null || UNDECIDED.has(made.to);
 }
 
 function editedFields(item: WorkItem): string[] | null {
@@ -72,12 +97,19 @@ export function cosProposalRows(items: readonly WorkItem[], opts: { since?: stri
   for (const item of items) {
     if (!isCos(item)) continue;
     if (opts.since && item.createdAt < opts.since) continue;
-    const move = item.history.find((h) => h.from !== null && UNDECIDED.has(h.from) && !UNDECIDED.has(h.to));
+    const first = item.history.find((h) => h.from !== null && UNDECIDED.has(h.from) && !UNDECIDED.has(h.to));
     let disposition: Disposition = "pending";
-    if (move) {
-      if (move.to === "needs-you") disposition = "taken";
-      else if (move.to === "in-progress") disposition = "sent";
-      else if (move.to === "done") disposition = /drop/i.test(move.note ?? "") ? "dropped" : "done";
+    // the move that decides: his own first move out of Triage, or, after an agent's route, his first move after it
+    let move = first;
+    if (first && first.by !== PRINCIPAL) {
+      if (first.to === "done") disposition = "closed-by-agent";
+      else {
+        const i = item.history.indexOf(first);
+        move = item.history.slice(i + 1).find((h) => h.by === PRINCIPAL && h.from !== null && h.from !== h.to);
+        if (move) disposition = principalDisposition(move.to, move.note);
+      }
+    } else if (first) {
+      disposition = principalDisposition(first.to, first.note);
     }
     const edited = editedFields(item);
     rows.push({
@@ -90,11 +122,23 @@ export function cosProposalRows(items: readonly WorkItem[], opts: { since?: stri
       disposition,
       edited,
       nowTitle: edited?.includes("title") ? item.title : null,
-      decidedAt: move?.at ?? null,
-      note: move?.note ?? null,
+      decidedAt: disposition === "pending" ? null : (move?.at ?? null),
+      note: disposition === "pending" ? null : (move?.note ?? null),
     });
   }
   return rows.sort((a, b) => (b.decidedAt ?? "9").localeCompare(a.decidedAt ?? "9") || b.itemId.localeCompare(a.itemId));
+}
+
+/**
+ * What a principal's move says about a proposal: taken into Needs you (or, after an agent routed it
+ * there, kept as his by moving it on), sent to a hand, done, dropped. A move back to Triage or Intake
+ * ("later") decides nothing yet.
+ */
+function principalDisposition(to: string, note: string | null | undefined): Disposition {
+  if (to === "done") return /drop/i.test(note ?? "") ? "dropped" : "done";
+  if (to === "in-progress") return "sent";
+  if (to === "needs-you") return "taken";
+  return "pending";
 }
 
 export interface H1Summary {

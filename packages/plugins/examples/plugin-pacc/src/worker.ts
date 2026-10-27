@@ -34,6 +34,9 @@ import { resolveHeartbeatUrl, sendHeartbeat } from "./lib/heartbeat.js";
 import {
   runMissedStewardCatchUp,
   runScheduledSteward,
+  stewardPauseReason,
+  stewardResumeActor,
+  stewardResumeRefusal,
 } from "./lib/steward/scheduled-steward.js";
 import { makeScheduledStewardDeps } from "./lib/steward/worker-deps.js";
 import {
@@ -961,7 +964,14 @@ const plugin: PaperclipPlugin = definePlugin({
     });
 
     // T-4.8 (D-39 parity): clear the steward's self-pause flag.
-    ctx.actions.register("resume-steward", async () => {
+    // F-cos.0: the caller is recorded, never assumed. `actor` comes from the
+    // params; a call that names nobody is refused before anything changes —
+    // never "principal" by default (the 27 Oct pause was cleared by a caller
+    // nobody could name). The cockpit passes "principal:<its door>", the CLI "cli".
+    ctx.actions.register("resume-steward", async (params) => {
+      const refusal = stewardResumeRefusal(params);
+      if (refusal) throw new Error(refusal);
+      const actor = stewardResumeActor(params);
       const prior = (await ctx.state.get({
         scopeKind: "instance",
         namespace: PLUGIN_NAMESPACE,
@@ -994,30 +1004,33 @@ const plugin: PaperclipPlugin = definePlugin({
         (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? "instance",
         {
           agent: "steward",
-          actor: "principal",
+          actor,
           at: new Date().toISOString(),
           priorReason: prior.reason,
         },
       );
-      return { resumed: true, priorReason: prior.reason };
+      ctx.logger.info(`steward: resumed by ${actor}`, { actor, priorReason: prior.reason });
+      return { resumed: true, priorReason: prior.reason, actor };
     });
 
     // F-3b.7: the principal pauses the steward's scheduled run (e.g. while the
     // chief of staff's home answers mail, FABRIC_SPEC D.5). The same flag the
     // tripwire sets, so a paused run writes its stub journal and resume-steward clears it.
+    // F-cos.0: the pause records its caller as a resume does (the cockpit's own pause at start is
+    // "the cockpit", never shown to David as his own).
     ctx.actions.register("pause-steward", async (params) => {
-      const raw = typeof (params as { reason?: unknown })?.reason === "string" ? (params as { reason: string }).reason.trim() : "";
-      const reason = `paused by the principal${raw ? `: ${raw.slice(0, 200)}` : ""}`;
+      const { actor, reason } = stewardPauseReason(params);
       const key = { scopeKind: "instance" as const, namespace: PLUGIN_NAMESPACE, stateKey: STEWARD_PAUSED_STATE_KEY };
       const prior = (await ctx.state.get(key)) as { paused?: boolean; reason?: string | null } | null;
       if (prior?.paused === true) return { paused: true, reason: prior.reason ?? reason, already: true };
       await ctx.state.set(key, { paused: true, reason, pausedAt: new Date().toISOString() });
       await ctx.events.emit("agent.paused", (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? "instance", {
         agent: "steward",
-        actor: "principal",
+        actor,
         at: new Date().toISOString(),
         reason,
       });
+      ctx.logger.info(`steward: paused by ${actor}`, { actor, reason });
       return { paused: true, reason, already: false };
     });
 
@@ -1417,6 +1430,9 @@ const plugin: PaperclipPlugin = definePlugin({
       try {
         const { deps, model } = await makeScheduledStewardDeps(ctx);
         const outcome = await runMissedStewardCatchUp({
+          // F-cos.0: keyed on the record's own journal store, never the vault
+          // file input-only mode never writes (every restart after 08:00 ran).
+          journalExists: deps.journalStore.journalExists,
           obsidianBaseDir: obsidianDailyDir(),
           logger: ctx.logger,
           runner: (options) => runScheduledSteward(deps, options),

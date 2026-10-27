@@ -32,6 +32,13 @@ export const STEWARD_IN_PROGRESS_STATE_KEY = "steward-in-progress.v1";
 export const STEWARD_JOURNAL_STORE_STATE_KEY = "steward-journal.v1";
 /** T-4.8 — last journal's per-project card keys (the "what changed" diff baseline). */
 export const STEWARD_JOURNAL_DELTA_STATE_KEY = "steward-journal-delta.v1";
+/**
+ * F-cos.0 — "the steward was paused on this day" marker (instance scope,
+ * namespace=journal-date, beside the journal). The missed-run check reads it
+ * with the journal, so a paused day never starts a catch-up run on restart.
+ * Kept off the journal key itself so readers of the journal never see a stub.
+ */
+export const STEWARD_JOURNAL_PAUSED_STATE_KEY = "steward-journal-paused.v1";
 
 /**
  * T-6.3 delta-only brief: the last brief's per-project card keys + aging

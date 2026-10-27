@@ -405,6 +405,8 @@ describe("(b) real pacc ids and paths pass through unchanged; the tripwire still
         lock,
         async emitEvent() {},
         logger: { info() {}, warn() {}, error() {} },
+        paused: { isPaused: () => hallucination.isPaused() },
+        journalStore: { journalExists: async () => false, markPausedDay: async () => undefined },
         hallucination,
       };
       const result = await runScheduledSteward(deps, {
